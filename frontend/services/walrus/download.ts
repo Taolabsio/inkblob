@@ -66,8 +66,7 @@ async function downloadFromSDK(blobId: string): Promise<Uint8Array> {
         console.debug('[Walrus Download] Trying SDK fallback');
 
         // Fetch blob using walrus() extension API
-        const [file] = await client.walrus.getFiles({ ids: [blobId] });
-        const result = await file.bytes();
+        const result = await client.walrus.readBlob({ blobId });
 
         console.debug(`[Walrus Download] SDK success: ${result.length} bytes`);
         return result;
@@ -99,7 +98,7 @@ export async function downloadBlob(blobId: string): Promise<Uint8Array> {
             if (error instanceof BlobNotFoundError ||
                 error.message?.includes('timeout') ||
                 error.message?.includes('fetch') ||
-                error.message?.includes('network') ||
+                error.message?.toLowerCase().includes('network') ||
                 error.message?.includes('Aggregator error')) {
 
                 return await downloadFromSDK(blobId);

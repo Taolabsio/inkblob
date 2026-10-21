@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useActiveNotebook } from './useActiveNotebook';
 import { decryptText } from '../crypto/decryption';
-import { useSuiClient } from '@mysten/dapp-kit';
+import { useSuiClient } from '../wallet';
 import { SuiService } from '../services/suiService';
 import { Folder } from '../types';
 
@@ -46,14 +46,14 @@ export function useFolders() {
                         } as Folder;
                     } catch (e) {
                         console.error('Failed to decrypt folder:', rawFolder.id, e);
-                        return null;
+                        throw e;
                     }
                 }));
 
                 return decryptedFolders.filter((f): f is Folder => f !== null);
             } catch (error) {
                 console.error('Error fetching folders:', error);
-                return [];
+                throw error;
             }
         },
         enabled: !!notebookId && !!encryptionKey,

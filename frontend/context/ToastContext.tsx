@@ -57,9 +57,13 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Clean up timeouts on unmount
   useEffect(() => {
+    const timers = timeoutsRef.current;
+    const promiseTimers = promiseTimeoutsRef.current;
     return () => {
-      timeoutsRef.current.forEach(timeout => clearTimeout(timeout));
-      promiseTimeoutsRef.current.forEach(timeout => clearTimeout(timeout));
+      timers.forEach(timeout => clearTimeout(timeout));
+      promiseTimers.forEach(timeout => clearTimeout(timeout));
+      timers.clear();
+      promiseTimers.clear();
     };
   }, []);
 
@@ -207,7 +211,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               await options.onConfirm();
             }
             resolve(true);
-          } catch (error) {
+          } catch {
             resolve(false);
           } finally {
             removeConfirmDialog(id);

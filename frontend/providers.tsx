@@ -1,30 +1,16 @@
-import React from 'react';
-import { createNetworkConfig, SuiClientProvider, WalletProvider } from '@mysten/dapp-kit';
-import { getFullnodeUrl } from '@mysten/sui/client';
+import React, { useEffect, useMemo } from 'react';
+import { DAppKitProvider, useCurrentAccount } from '@mysten/dapp-kit-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { EncryptionProvider } from './context/EncryptionContext';
-import { SessionProvider } from './context/SessionContext';
-import '@mysten/dapp-kit/dist/index.css';
+import { dAppKit } from './wallet';
 
-const { networkConfig } = createNetworkConfig({
-    testnet: { url: getFullnodeUrl('testnet') },
-    mainnet: { url: getFullnodeUrl('mainnet') },
-});
-
-const queryClient = new QueryClient();
-
-export const Providers: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    return (
-        <QueryClientProvider client={queryClient}>
-            <SuiClientProvider networks={networkConfig} defaultNetwork="testnet">
-                <WalletProvider>
-                    <EncryptionProvider>
-                        <SessionProvider>
-                            {children}
-                        </SessionProvider>
-                    </EncryptionProvider>
-                </WalletProvider>
-            </SuiClientProvider>
-        </QueryClientProvider>
-    );
-};
+function AccountQueries({ children }: { children: React.ReactNode }) {
+    const account = useCurrentAccount();
+    // A new cache per account prevents decrypted content from crossing wallet boundaries.
+    const cacheScope = account?.address ?? 'disconnected';
+    const client = useMemo(() => { void cacheScope; return new QueryClient({ defaultOptions: { queries: { retry: 2, refetchOnWindowFocus: true } } }); }, [cacheScope]);
+    useEffect(() => () => { void client.cancelQueries().then(() => client.clear()); }, [client]);
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+export function Providers({ children }: { children: React.ReactNode }) {
+    return <DAppKitProvider dAppKit={dAppKit}><AccountQueries>{children}</AccountQueries></DAppKitProvider>;
+}

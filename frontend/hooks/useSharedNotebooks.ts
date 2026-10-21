@@ -1,4 +1,4 @@
-import { useCurrentAccount, useSuiClient } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSuiClient } from '../wallet';
 import { useQuery } from '@tanstack/react-query';
 import { SuiService } from '../services/suiService';
 

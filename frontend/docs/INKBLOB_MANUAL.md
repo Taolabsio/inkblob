@@ -1,57 +1,61 @@
-# InkBlob Product Manual
+# InkBlob product manual
 
-## Introduction
-InkBlob is a decentralized, privacy-first note-taking application designed to rival modern tools like Notion. Built on the Sui blockchain and Walrus storage, InkBlob ensures your ideas are owned solely by you. Experience a fluid, block-based editing environment that feels familiar yet powerful.
+InkBlob is a private writing workspace. Connect and unlock a Sui wallet to use your encrypted
+notebook, or select **Take a look inside** to explore an interactive preview. Preview notes stay
+in memory only and disappear when you leave the preview.
 
-## Core Features
+## Write with blocks
 
-### 📝 The Notion-Like Editor
-InkBlob features a powerful rich-text editor that treats content as blocks, allowing for a versatile writing experience.
+Type `/` to search for a block by name or alias. For example, `/h2`, `/todo`, `/code`, `/table`,
+and `/待辦` narrow the menu. Use the arrow keys and Enter to insert, or click an option.
 
-#### Slash Commands
-Just like Notion, press `/` at the beginning of any empty line to trigger the Slash Menu. This menu gives you instant access to all available block types and formatting options without lifting your hands from the keyboard.
+Available blocks: text, three heading levels, bullet and numbered lists, to-do lists,
+quotes, code, callouts, toggles, dividers, and tables.
 
-#### Block Types
-- **Text & Headings**: Structure your documents with Heading 1, 2, and 3.
-- **Lists**: Create Bullet Lists and Numbered Lists for organization.
-- **Quotes**: Highlight important text with Quote blocks.
-- **Code Blocks**: Write snippets of code with syntax highlighting support.
-- **Dividers**: Visually separate sections with horizontal lines.
-- **Tables**: Insert dynamic tables to organize data.
+- Use the formatting toolbar to change the current block type. Select text to use the floating
+  toolbar for bold, italic, underline, strikethrough, inline code, links, and colors.
+- Check tasks by clicking their checkbox or focusing it and pressing Space. Enter adds a task;
+  Enter again on an empty task returns to a paragraph. `[] ` also starts a task list.
+- Convert a paragraph into a toggle to retain its text as the toggle title. Enter in the title
+  starts its body. Backspace at the beginning of the title unwraps it.
+- Click a block's drag handle to duplicate, delete, convert, or color it. Drag it to reorder.
+- Insert a table by clicking its dimensions or using arrow keys and Enter. Tab moves between
+  table cells. Wide tables scroll within the page.
+- In code blocks, choose a language from the toolbar to enable syntax highlighting.
+- Paste `example.com/page` into the link popover to create an HTTPS link. Email and telephone
+  links use `mailto:` and `tel:` respectively.
 
-#### 📊 Advanced Table Insertion
-Inkblob now features an intuitive **Table Grid Selector**:
-1. Type `/table` or select "Table" from the slash menu.
-2. A grid selector will appear near your cursor.
-3. Hover to choose your desired dimensions (e.g., 4 columns x 5 rows).
-4. Click to insert—no more manual configuration needed.
+The keyboard button at the right of the formatting toolbar opens the shortcut reference.
 
-### 🎨 Customization
-- **Themes**: Toggle between Light and Dark modes to suit your environment. The interface adapts instantly with a carefully curated color palette.
-- **Cover Images & Icons**: (Coming Soon) Personalize your notes with custom headers and emoji icons.
+## Keyboard shortcuts
 
-### 🔒 Decentralized Storage
-Your notes are yours.
-- **Walrus Protocol**: All content is encrypted and stored on the Walrus decentralized storage network.
-- **Sui Integration**: Note metadata and ownership are secured on the Sui blockchain.
-- **Privacy First**: No central server reads your notes.
-
-## Keyboard Shortcuts
+“Mod” means Command on macOS or Ctrl on Windows and Linux. Editor shortcuts apply while
+writing in the note content; Save also works from the title. IME composition is left alone.
 
 | Shortcut | Action |
-|----------|--------|
-| `/` | Open Slash Menu |
-| `Cmd/Ctrl + B` | Bold |
-| `Cmd/Ctrl + I` | Italic |
-| `Cmd/Ctrl + U` | Underline |
-| `Cmd/Ctrl + Z` | Undo |
-| `Cmd/Ctrl + Shift + Z` | Redo |
+|---|---|
+| `/` | Search and insert a block |
+| Mod B / I / U | Bold / italic / underline |
+| Mod E | Inline code |
+| Mod Shift X | Strikethrough |
+| Mod Shift K | Insert or edit a link |
+| Mod D | Duplicate the current block |
+| Mod Z / Mod Shift Z | Undo / redo |
+| Mod S | Save the note |
+| Mod Alt 0 | Plain text |
+| Mod Alt 1 / 2 / 3 | Heading 1 / 2 / 3 |
+| Mod Alt 4 / 5 / 6 | To-do / bullet / numbered list |
+| Mod Alt 7 / 8 / 9 | Toggle / code / quote |
+| Mod K | Search notes and folders |
 
-## Getting Started
-1. **Connect Wallet**: Sign in with your Sui wallet.
-2. **Create Note**: Click "Create a new note" or the `+` button in the sidebar.
-3. **Write**: Start typing! Use Markdown syntax (e.g., `# ` for H1, `- ` for list) or the Slash command.
-4. **Save**: Your notes are automatically encrypted and saved to Walrus.
+## Notes and storage
 
----
-*InkBlob - Where your thoughts live forever, decentralized.*
+Use the plus button above the note list to start a note. Folders, nested pages, pinned notes,
+search, and Trash help organize your workspace. Export downloads an unencrypted local JSON
+copy. Keep exported files private.
+
+Connected notebooks encrypt titles and content in the browser. Saves use SUI and WAL.
+Walrus storage is time-limited; open **Storage details** in the editor to inspect and extend it.
+Owners can share a whole notebook with another wallet, with read or write access.
+Read-only notebooks hide editing tools. Shared writable notebooks require manual Save with a
+wallet signature; autosave is disabled there.

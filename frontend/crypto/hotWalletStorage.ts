@@ -1,5 +1,5 @@
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { fromB64, toB64 } from '@mysten/sui/utils';
+import { fromBase64, toBase64 } from '@mysten/sui/utils';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 
 /**
@@ -34,7 +34,7 @@ async function deriveHotWalletEncryptionKey(
     walletSignature: string,
     userAddress: string
 ): Promise<CryptoKey> {
-    const signatureBytes = fromB64(walletSignature);
+    const signatureBytes = fromBase64(walletSignature);
 
     const keyMaterial = await crypto.subtle.importKey(
         'raw',
@@ -96,8 +96,8 @@ export async function storeHotWallet(
     // 5. Prepare storage data
     const storageData: EncryptedHotWalletData = {
         version: STORAGE_VERSION,
-        encryptedPrivateKey: toB64(new Uint8Array(encryptedBytes)),
-        iv: toB64(iv),
+        encryptedPrivateKey: toBase64(new Uint8Array(encryptedBytes)),
+        iv: toBase64(iv),
         deviceFingerprint,
         expiresAt,
         hotWalletAddress: keypair.toSuiAddress(),
@@ -163,8 +163,8 @@ export async function retrieveHotWallet(
         const decryptionKey = await deriveHotWalletEncryptionKey(encryptionSignature, userAddress);
 
         // 6. Decrypt private key
-        const iv = fromB64(data.iv);
-        const encryptedBytes = fromB64(data.encryptedPrivateKey);
+        const iv = fromBase64(data.iv);
+        const encryptedBytes = fromBase64(data.encryptedPrivateKey);
 
         const decryptedBytes = await crypto.subtle.decrypt(
             { name: 'AES-GCM', iv },
@@ -194,7 +194,7 @@ export async function retrieveHotWallet(
         // Clear corrupted data
         try {
             localStorage.removeItem(storageKey);
-        } catch (e) {
+        } catch {
             // Ignore cleanup errors
         }
         return null;
@@ -232,7 +232,7 @@ export async function hasValidStoredHotWallet(deviceFingerprint: string): Promis
             data.deviceFingerprint === deviceFingerprint &&
             Date.now() < data.expiresAt
         );
-    } catch (error) {
+    } catch {
         return false;
     }
 }
@@ -260,7 +260,7 @@ export function getHotWalletInfo(deviceFingerprint: string): {
             address: data.hotWalletAddress,
             expiresAt: data.expiresAt,
         };
-    } catch (error) {
+    } catch {
         return null;
     }
 }

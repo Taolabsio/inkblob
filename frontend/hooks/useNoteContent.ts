@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { downloadInkBlobContent } from '../services/walrus/download';
 import { useActiveNotebook } from './useActiveNotebook';
 
 /**
@@ -32,7 +31,7 @@ export function isValidBlobId(blobId: string | null | undefined): blobId is stri
 /**
  * Hook to fetch and decrypt note content from Walrus
  */
-export function useNoteContent(blobId: string | null | undefined) {
+export function useNoteContent(blobId: string | null | undefined, alreadyLoaded = false) {
     // Active-notebook seam: own mode = the own encryption key (identical to before), shared mode
     // = the unwrapped shared content key. The queryKey stays ['note-content', blobId] - safe
     // because a given blobId belongs to exactly one notebook, so the blobId -> correct-key
@@ -54,12 +53,8 @@ export function useNoteContent(blobId: string | null | undefined) {
 
             try {
                 console.debug('[useNoteContent] Loading content for blob:', blobId);
+                const { downloadInkBlobContent } = await import('../services/walrus/download');
                 const content = await downloadInkBlobContent(blobId, encryptionKey);
-                console.debug('[useNoteContent] Content loaded successfully:', {
-                    blobId,
-                    contentLength: content.length,
-                    contentPreview: content.substring(0, 100) + (content.length > 100 ? '...' : '')
-                });
                 return content;
             } catch (error) {
                 console.error('[useNoteContent] Failed to load note content:', {
@@ -68,11 +63,10 @@ export function useNoteContent(blobId: string | null | undefined) {
                     errorType: error.constructor.name
                 });
 
-                // Return empty string as fallback to maintain UI functionality
-                return '';
+                throw error;
             }
         },
-        enabled: !!blobId && !!encryptionKey && isValidBlobId(blobId),
+        enabled: !alreadyLoaded && !!blobId && !!encryptionKey && isValidBlobId(blobId),
         staleTime: 5 * 60 * 1000, // Cache content for 5 minutes
         retry: 2, // Retry failed downloads twice
     });

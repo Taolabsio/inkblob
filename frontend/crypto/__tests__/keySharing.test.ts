@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toB64 } from '@mysten/sui/utils';
+import { toBase64 } from '@mysten/sui/utils';
 import {
     deriveEncryptionKeyRawBits,
     deriveX25519KeyPair,
@@ -9,8 +9,8 @@ import {
 import { decryptContent } from '../decryption';
 
 const mockUserAddress = '0x' + '1'.repeat(64);
-const mockSignature = toB64(new Uint8Array(64).fill(7));
-const otherSignature = toB64(new Uint8Array(64).fill(9));
+const mockSignature = toBase64(new Uint8Array(64).fill(7));
+const otherSignature = toBase64(new Uint8Array(64).fill(9));
 
 describe('keySharing (envelope encryption)', () => {
     describe('deriveX25519KeyPair', () => {

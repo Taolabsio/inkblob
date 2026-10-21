@@ -1,6 +1,8 @@
 import { useActiveNotebookContext } from '../context/ActiveNotebookContext';
 import { useEncryption } from '../context/EncryptionContext';
 import { useNotebook } from './useNotebook';
+import { useQuery } from '@tanstack/react-query';
+import { deriveNotebookKey } from '../crypto/keySharing';
 
 export interface ActiveNotebookInfo {
     /** own mode: notebook?.data?.objectId ?? null; shared mode: the shared notebook's id. */
@@ -26,7 +28,15 @@ export interface ActiveNotebookInfo {
 export function useActiveNotebook(): ActiveNotebookInfo {
     const { active, isShared, isReadOnly } = useActiveNotebookContext();
     const { data: notebook } = useNotebook();
-    const { encryptionKey } = useEncryption();
+    const { encryptionKey, lastSignature, lastUserAddress } = useEncryption();
+    const ownId = notebook?.data?.objectId;
+    const { data: ownKey } = useQuery({
+        queryKey: ['notebook-key', lastUserAddress, ownId],
+        queryFn: () => deriveNotebookKey(lastSignature!, lastUserAddress!, ownId!),
+        enabled: active.kind === 'own' && !!ownId && !!lastSignature && !!lastUserAddress && !!encryptionKey,
+        staleTime: Infinity,
+        gcTime: 0,
+    });
 
     if (active.kind === 'shared') {
         return {
@@ -41,7 +51,7 @@ export function useActiveNotebook(): ActiveNotebookInfo {
 
     return {
         notebookId: notebook?.data?.objectId ?? null,
-        encryptionKey,
+        encryptionKey: ownKey ?? null,
         isShared: false,
         isReadOnly: false,
         permission: null,

@@ -30,4 +30,9 @@ export default tseslint.config(
       'no-console': 'off',
     },
   },
+  {
+    // Providers intentionally colocate their hooks; this is not a Fast Refresh boundary.
+    files: ['context/**/*.tsx', 'wallet.tsx'],
+    rules: { 'react-refresh/only-export-components': 'off' },
+  },
 );

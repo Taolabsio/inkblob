@@ -1,4 +1,4 @@
-import { useCurrentAccount, useSignAndExecuteTransaction, useSignPersonalMessage, useSuiClient } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSignAndExecuteTransaction, useSignPersonalMessage, useSuiClient } from '../wallet';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import {
@@ -304,7 +304,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
                     maxAttempts: 10,
                     initialDelay: 500,
                     maxDelay: 3000,
-                    onRetry: (attempt, delay) => {
+                    onRetry: (attempt, _delay) => {
                         console.log(`[SessionContext] Polling for SessionCap (attempt ${attempt}/10)...`);
                     },
                 }
@@ -413,7 +413,12 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
      */
     const revokeSession = async () => {
         try {
-            // Clear encrypted storage
+            if (sessionCap && currentAccount) {
+                const notebookId = (sessionCap.content as any)?.fields?.notebook_id;
+                if (!notebookId) throw new Error('Cannot identify the session notebook');
+                await signAndExecuteTransaction({ transaction: suiService.revokeSessionTx(notebookId, sessionCap.objectId) });
+            }
+            // Clear only after the chain confirms revocation.
             const fingerprint = await deriveDeviceFingerprint();
             clearHotWallet(fingerprint);
 
@@ -426,10 +431,12 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
             console.log('[SessionContext] Session revoked successfully');
 
-            // TODO: Call on-chain revoke_session() to reclaim funds
+
 
         } catch (error) {
             console.error('[SessionContext] Failed to revoke session:', error);
+            setError(error instanceof Error ? error.message : 'Session revocation failed');
+            throw error;
         }
     };
 
@@ -465,7 +472,10 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
             if (timeUntilExpiration <= 0) {
                 console.warn('[SessionContext] Session expired, clearing...');
-                revokeSession();
+                setSessionCap(null);
+                setEphemeralKeypair(null);
+                setHotWalletAddress(null);
+                setSessionExpiresAt(null);
             } else if (timeUntilExpiration <= EXPIRATION_WARNING_THRESHOLD) {
                 console.warn('[SessionContext] Session expiring soon:', new Date(sessionExpiresAt).toISOString());
                 // TODO: Show UI warning to user

@@ -1,4 +1,4 @@
-import { useSuiClient } from '@mysten/dapp-kit';
+import { useSuiClient } from '../wallet';
 import { useCallback } from 'react';
 
 // Same VITE_WAL_PACKAGE_ID lookup / coinType construction already used by SessionContext.tsx's

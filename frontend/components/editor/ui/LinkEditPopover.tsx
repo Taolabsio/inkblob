@@ -1,6 +1,8 @@
 import { Check, ExternalLink, Copy, Trash2 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { normalizeLinkUrl } from '../utils/linkUrl';
+import { usePopoverPosition } from './usePopoverPosition';
 import { useClickOutside } from '../../../hooks/useClickOutside';
 
 interface LinkEditPopoverProps {
@@ -19,6 +21,7 @@ interface LinkEditPopoverProps {
 export const LinkEditPopover: React.FC<LinkEditPopoverProps> = ({ currentUrl, position, onApply, onRemove, onClose }) => {
     const [value, setValue] = useState(currentUrl ?? '');
     const [copied, setCopied] = useState(false);
+    const [error, setError] = useState('');
     const containerRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
@@ -28,32 +31,36 @@ export const LinkEditPopover: React.FC<LinkEditPopoverProps> = ({ currentUrl, po
     }, []);
 
     useClickOutside(containerRef, onClose);
+    const clamped = usePopoverPosition(containerRef, position);
 
     const submit = () => {
-        const trimmed = value.trim();
-        if (trimmed) onApply(trimmed);
+        const url = normalizeLinkUrl(value);
+        if (!url) { setError('Enter a valid web, email, or telephone link.'); return; }
+        onApply(url);
         onClose();
     };
 
     const copyUrl = async () => {
         if (!currentUrl) return;
-        await navigator.clipboard.writeText(currentUrl);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
+        try { await navigator.clipboard.writeText(currentUrl); setCopied(true); }
+        catch { setError('Could not copy the link. You can select and copy the URL above.'); }
     };
 
     return createPortal(
         <div
             ref={containerRef}
+            role="dialog" aria-label="Edit link"
             className="fixed z-50 w-72 rounded-lg border border-web3-border bg-web3-card shadow-xl p-2 animate-in fade-in zoom-in-95 duration-100"
-            style={{ top: position.top, left: position.left }}
+            style={clamped}
             onClick={(e) => e.stopPropagation()}
         >
             <div className="flex items-center gap-1.5">
                 <input
                     ref={inputRef}
+                    aria-label="Link URL"
                     value={value}
-                    onChange={(e) => setValue(e.target.value)}
+                    onChange={(e) => { setValue(e.target.value); setError(''); }}
+                    aria-invalid={!!error}
                     placeholder="Paste or type a URL..."
                     className="flex-1 min-w-0 bg-web3-bg/50 px-2 py-1.5 text-sm rounded border border-web3-border outline-none text-web3-text placeholder-web3-textMuted focus:border-web3-primary/50"
                     onKeyDown={(e) => {
@@ -71,6 +78,7 @@ export const LinkEditPopover: React.FC<LinkEditPopoverProps> = ({ currentUrl, po
                 </button>
             </div>
 
+            {error && <p role="alert" className="text-xs text-red-700 dark:text-red-300 mt-2 px-1">{error}</p>}
             {currentUrl && (
                 <div className="flex items-center gap-1 mt-1.5 pt-1.5 border-t border-web3-border/50">
                     <a

@@ -1,67 +1,20 @@
-import { getFullnodeUrl } from '@mysten/sui/client';
-import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
+import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { walrus } from '@mysten/walrus';
-// Import WASM URL for Vite bundler
-// @ts-expect-error - no type declaration for Vite's `?url` suffix import
 import walrusWasmUrl from '@mysten/walrus-wasm/web/walrus_wasm_bg.wasm?url';
+import { GRPC_URL, NETWORK, STORAGE_EPOCHS } from '../../config/network';
 
 export const WALRUS_CONFIG = {
-    // Testnet configuration
-    network: 'testnet' as const,
-
-    // Upload relay for browser compatibility
-    uploadRelay: (import.meta as any).env?.VITE_WALRUS_PUBLISHER_URL || 'https://publisher.walrus-testnet.walrus.space',
-
-    // Aggregator for downloads
-    aggregator: (import.meta as any).env?.VITE_WALRUS_AGGREGATOR_URL || 'https://aggregator.walrus-testnet.walrus.space',
-    publisher: (import.meta as any).env?.VITE_WALRUS_PUBLISHER_URL || 'https://publisher.walrus-testnet.walrus.space',
-
-    // Default storage duration (epochs)
-    // 1 epoch ≈ 24 hours on testnet
-    defaultEpochs: 30, // ~30 days
-
-    // Max blob size (100 MB)
+    network: NETWORK,
+    uploadRelay: import.meta.env.VITE_WALRUS_UPLOAD_RELAY_URL || `https://upload-relay.${NETWORK}.walrus.space`,
+    aggregator: import.meta.env.VITE_WALRUS_AGGREGATOR_URL || `https://aggregator.walrus-${NETWORK}.walrus.space`,
+    defaultEpochs: STORAGE_EPOCHS,
     maxBlobSize: 100 * 1024 * 1024,
-
-    // Aggregator download timeout (milliseconds)
-    aggregatorTimeout: parseInt((import.meta as any).env?.VITE_WALRUS_AGGREGATOR_TIMEOUT || '10000'),
+    aggregatorTimeout: Number(import.meta.env.VITE_WALRUS_AGGREGATOR_TIMEOUT) || 10000,
 };
 
-/**
- * Create Walrus-extended Sui client
- * Uses SuiJsonRpcClient with walrus() extension as per SDK v0.8.4 requirements
- */
-export function createWalrusClient(signer?: any) {
-    // Create SuiJsonRpcClient with explicit network configuration for Walrus
-    // Walrus SDK requires specific network format that differs from dapp-kit client
-    const baseClient = new SuiJsonRpcClient({
-        url: getFullnodeUrl('testnet'),
-        network: 'testnet',
-    });
-
-    // Force assign signer if provided (bypassing type check)
-    // This is required because the Walrus SDK expects the client to have a signer
-    // but SuiJsonRpcClient types might not expose it directly in options
-    if (signer) {
-        (baseClient as any).signer = signer;
-    }
-
-    const client = baseClient.$extend(
-        walrus({
-            // Configure WASM URL for Vite bundler
-            // This ensures the WASM file is properly loaded in browser
-            wasmUrl: walrusWasmUrl,
-
-            // Configure upload relay for browser environments
-            // This reduces the number of requests needed for uploads
-            uploadRelay: {
-                host: WALRUS_CONFIG.uploadRelay,
-                sendTip: {
-                    max: 1_000, // Maximum tip in MIST
-                },
-            },
-        })
-    );
-
-    return client;
+export function createWalrusClient(_signer?: unknown) {
+    return new SuiGrpcClient({ network: NETWORK, baseUrl: GRPC_URL }).$extend(walrus({
+        wasmUrl: walrusWasmUrl,
+        uploadRelay: { host: WALRUS_CONFIG.uploadRelay, sendTip: { max: 1000 } },
+    }));
 }

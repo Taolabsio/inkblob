@@ -1,4 +1,4 @@
-import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSignAndExecuteTransaction } from '../wallet';
 import { Transaction } from '@mysten/sui/transactions';
 import { useEffect, useRef } from 'react';
 import { useEncryption } from '../context/EncryptionContext';
@@ -54,12 +54,12 @@ export function useNotebookMutation() {
      * enroll a session (reusing the unlock signature when possible), returning null on decline or
      * failure so the caller falls back to plain wallet signing.
      */
-    const ensureSessionAuthorized = async (notebookId: string): Promise<AuthorizedSigner | null> => {
-        if (isSessionValid && sessionCap && ephemeralKeypair) {
+    const ensureSessionAuthorized = async (notebookId: string, options: { interactive?: boolean } = {}): Promise<AuthorizedSigner | null> => {
+        if (isSessionValid && sessionCap && ephemeralKeypair && sessionCap.content?.fields?.notebook_id === notebookId) {
             return { sessionCap, ephemeralKeypair };
         }
 
-        if (hasDeclinedSessionPromptRef.current) {
+        if (options.interactive === false || hasDeclinedSessionPromptRef.current) {
             return null;
         }
 
@@ -81,6 +81,7 @@ export function useNotebookMutation() {
             }
             return await authorizeSession(notebookId);
         } catch (authError: any) {
+            hasDeclinedSessionPromptRef.current = true;
             if (authError?.message?.includes('WAL')) {
                 toast.info(
                     'Session authorization requires WAL tokens',

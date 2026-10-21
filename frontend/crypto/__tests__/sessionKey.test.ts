@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { deriveDeviceFingerprint, deriveHotWallet } from '../sessionKey';
 import { deriveEncryptionKey } from '../keyDerivation';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { toB64 } from '@mysten/sui/utils';
+import { toBase64 } from '@mysten/sui/utils';
 
 // Mock browser globals
 const localStorageMock = (() => {
@@ -67,7 +67,7 @@ describe('Session Key Derivation (P0/P1 Security Fixes)', () => {
 
     describe('Hot Wallet Derivation (P1 - HKDF Context)', () => {
         it('should derive a hot wallet from signature', async () => {
-            const mockSignature = toB64(new Uint8Array(64).fill(1));
+            const mockSignature = toBase64(new Uint8Array(64).fill(1));
             const fingerprint = await deriveDeviceFingerprint();
 
             const keypair1 = await deriveHotWallet(mockSignature, fingerprint);
@@ -78,7 +78,7 @@ describe('Session Key Derivation (P0/P1 Security Fixes)', () => {
         });
 
         it('should derive different wallets for different fingerprints', async () => {
-            const mockSignature = toB64(new Uint8Array(64).fill(1));
+            const mockSignature = toBase64(new Uint8Array(64).fill(1));
 
             // Use SHA-256 hashes as fingerprints (64 hex chars)
             const fingerprint1 = 'a'.repeat(64);
@@ -91,7 +91,7 @@ describe('Session Key Derivation (P0/P1 Security Fixes)', () => {
         });
 
         it('should maintain deterministic derivation (same inputs = same output)', async () => {
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
             const fingerprint = 'c'.repeat(64);
 
             const keypair1 = await deriveHotWallet(mockSignature, fingerprint);
@@ -109,7 +109,7 @@ describe('Session Key Derivation (P0/P1 Security Fixes)', () => {
 
     describe('Encryption Key Derivation (P1 - User-Specific Salt)', () => {
         const mockUserAddress = '0x' + '1'.repeat(64);
-        const mockSignature = toB64(new Uint8Array(64).fill(7));
+        const mockSignature = toBase64(new Uint8Array(64).fill(7));
 
         it('should require valid user address', async () => {
             await expect(deriveEncryptionKey(mockSignature, '')).rejects.toThrow('Invalid SUI address format');

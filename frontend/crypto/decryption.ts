@@ -31,7 +31,7 @@ export async function decryptContent(
 
         // 4. Decode bytes to string
         return new TextDecoder().decode(plaintextBytes);
-    } catch (error) {
+    } catch {
         // Authentication tag verification failed or decryption error
         throw new Error('Decryption failed: data may be corrupted or tampered with');
     }

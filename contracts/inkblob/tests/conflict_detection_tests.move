@@ -50,7 +50,7 @@ module inkblob::conflict_detection_tests {
 
         let current_updated_at = {
             let note = notebook::borrow_note(notebook::get_notebook_notes(&notebook), note_id);
-            notebook::note_updated_at(note)
+            notebook::note_revision(note)
         };
 
         update_note(
@@ -86,7 +86,7 @@ module inkblob::conflict_detection_tests {
 
         let current_updated_at = {
             let note = notebook::borrow_note(notebook::get_notebook_notes(&notebook), note_id);
-            notebook::note_updated_at(note)
+            notebook::note_revision(note)
         };
         // A bogus/stale value guaranteed not to equal the note's real updated_at.
         let stale_updated_at = current_updated_at + 999999;
@@ -241,7 +241,7 @@ module inkblob::conflict_detection_tests {
 
         let current_updated_at = {
             let note = notebook::borrow_note(notebook::get_notebook_notes(&notebook), note_id);
-            notebook::note_updated_at(note)
+            notebook::note_revision(note)
         };
 
         test_utils::switch_to_user(&mut scenario, hot_wallet);
@@ -281,7 +281,7 @@ module inkblob::conflict_detection_tests {
 
         let current_updated_at = {
             let note = notebook::borrow_note(notebook::get_notebook_notes(&notebook), note_id);
-            notebook::note_updated_at(note)
+            notebook::note_revision(note)
         };
         let stale_updated_at = current_updated_at + 999999;
 

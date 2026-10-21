@@ -1,63 +1,54 @@
 import React, { createContext, useContext, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useCurrentAccount } from '../wallet';
 import { useSuiService } from '../hooks/useSuiService';
 import { useActiveNotebook } from '../hooks/useActiveNotebook';
+import { useActiveNotebookContext } from './ActiveNotebookContext';
 
-// Placeholder for future sync state (e.g. isSyncing) - empty for now
-type SyncContextValue = Record<string, never>;
-
-const SyncContext = createContext<SyncContextValue | null>(null);
-
-export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const SyncContext = createContext<Record<string, never> | null>(null);
+export function SyncProvider({ children }: { children: React.ReactNode }) {
     const queryClient = useQueryClient();
-    const suiService = useSuiService();
-    // Gated on the ACTIVE notebook id (own or shared) rather than useNotebook directly, so a
-    // grantee viewing a shared notebook still gets event-driven invalidation even while their own
-    // notebook is missing/initializing. Own-mode value is identical to the old
-    // notebook?.data?.objectId. The invalidations below deliberately stay prefix-shaped
-    // (['notes'] / ['folders']): React Query v5's default fuzzy matching prefix-matches
-    // ['notes', <anyNotebookId>], so they cover both modes' query keys unchanged.
-    const { notebookId } = useActiveNotebook();
-
+    const service = useSuiService();
+    const { notebookId, isShared, permission } = useActiveNotebook();
+    const { exitShared } = useActiveNotebookContext();
+    const account = useCurrentAccount();
     useEffect(() => {
-        let unsubscribe: (() => void) | undefined;
-
-        const setupSubscription = async () => {
-            if (!notebookId) return;
-
+        if (!notebookId) return;
+        let cancelled = false;
+        let polling = false;
+        const poll = async () => {
+            if (polling || document.visibilityState === 'hidden') return;
+            polling = true;
             try {
-                unsubscribe = await suiService.subscribeToEvents((event) => {
-                    console.log('Received event:', event);
-                    // Invalidate queries to trigger refetch
-                    // We can be more granular based on event type if needed
-                    queryClient.invalidateQueries({ queryKey: ['notes'] });
-                    queryClient.invalidateQueries({ queryKey: ['folders'] });
-                });
-            } catch (error) {
-                console.error('Failed to subscribe to events:', error);
-            }
+                if (isShared && account) {
+                    const grants = await service.fetchNotebookPermissions(notebookId);
+                    const grant = grants.find(entry => entry.address.toLowerCase() === account.address.toLowerCase());
+                    if (cancelled) return;
+                    if (!grant || grant.permission !== permission ||
+                        (grant.expiresAt !== '18446744073709551615' && Number(grant.expiresAt) <= Date.now())) {
+                        exitShared();
+                        queryClient.removeQueries({ queryKey: ['note-content'] });
+                        return;
+                    }
+                }
+                if (cancelled) return;
+                await Promise.all([
+                    queryClient.invalidateQueries({ queryKey: ['notes', notebookId] }),
+                    queryClient.invalidateQueries({ queryKey: ['folders', notebookId] }),
+                ]);
+            } catch { /* Keep the last successful state on transient network failures. */ }
+            finally { polling = false; }
         };
-
-        setupSubscription();
-
-        return () => {
-            if (unsubscribe) {
-                unsubscribe();
-            }
-        };
-    }, [suiService, notebookId, queryClient]);
-
-    return (
-        <SyncContext.Provider value={{}}>
-            {children}
-        </SyncContext.Provider>
-    );
-};
-
-export const useSync = () => {
+        // gRPC-backed polling works in browsers without the retired JSON-RPC WebSocket API.
+        const timer = setInterval(() => { void poll(); }, 10000);
+        const onFocus = () => { void poll(); };
+        window.addEventListener('focus', onFocus);
+        return () => { cancelled = true; clearInterval(timer); window.removeEventListener('focus', onFocus); };
+    }, [notebookId, isShared, permission, account, service, queryClient, exitShared]);
+    return <SyncContext.Provider value={{}}>{children}</SyncContext.Provider>;
+}
+export function useSync() {
     const context = useContext(SyncContext);
-    if (!context) {
-        throw new Error('useSync must be used within a SyncProvider');
-    }
+    if (!context) throw new Error('useSync requires SyncProvider');
     return context;
-};
+}

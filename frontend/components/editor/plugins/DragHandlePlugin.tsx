@@ -1,9 +1,10 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
 import { DraggableBlockPlugin_EXPERIMENTAL } from '@lexical/react/LexicalDraggableBlockPlugin';
-import { $createParagraphNode, $getNearestNodeFromDOMNode, $isElementNode } from 'lexical';
+import { $createParagraphNode, $getNearestNodeFromDOMNode } from 'lexical';
 import { GripVertical, Plus } from 'lucide-react';
 import React, { useRef, useState } from 'react';
 import { BlockContextMenu } from '../ui/BlockContextMenu';
+import { $resolveActionableBlock } from '../utils/blockTransforms';
 
 interface DragHandlePluginProps {
     anchorElem: HTMLElement;
@@ -39,7 +40,8 @@ export default function DragHandlePlugin({ anchorElem }: DragHandlePluginProps) 
         editor.update(() => {
             const node = $getNearestNodeFromDOMNode(el);
             if (!node) return;
-            const target = $isElementNode(node) ? node.getTopLevelElementOrThrow() : node;
+            const target = $resolveActionableBlock(node);
+            if (!target) return;
             const paragraph = $createParagraphNode();
             target.insertAfter(paragraph);
             paragraph.selectStart();

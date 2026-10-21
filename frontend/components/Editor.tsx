@@ -1,7 +1,11 @@
-import React, { useEffect, useMemo, useState, Component } from 'react';
-import { ChevronLeft, ChevronRight, Eye, FileText, Folder as FolderIcon, Plus, RotateCcw } from 'lucide-react';
+import React, { useEffect, useMemo, useState, useRef, Component } from 'react';
+import { CalendarDays, Check, Clock3, LockKeyhole, ChevronLeft, ChevronRight, Eye, FileText, Folder as FolderIcon, Plus, RotateCcw } from 'lucide-react';
 import { Folder, Note } from '../types';
-import { Trash, PenLine, Save, Share } from 'lucide-react';
+import { exportNote } from '../utils/exportNote';
+import { STORAGE_EPOCHS } from '../config/network';
+import { useBlobRetention } from '../hooks/useBlobRetention';
+import { noteText } from '../utils/noteText';
+import { Trash, PenLine, Save, Share, Download } from 'lucide-react';
 import { NOTE_DELETE_ENABLED, NOTE_DELETE_DISABLED_REASON } from '../config/featureFlags';
 import { useAutosave } from '../hooks/useAutosave';
 import { useNoteContent } from '../hooks/useNoteContent';
@@ -14,8 +18,9 @@ import { ContentEditable } from '@lexical/react/LexicalContentEditable';
 import { HistoryPlugin } from '@lexical/react/LexicalHistoryPlugin';
 import { OnChangePlugin } from '@lexical/react/LexicalOnChangePlugin';
 import { MarkdownShortcutPlugin } from '@lexical/react/LexicalMarkdownShortcutPlugin';
-import { TRANSFORMERS } from '@lexical/markdown';
+import { CHECK_LIST, TRANSFORMERS } from '@lexical/markdown';
 import { ListPlugin } from '@lexical/react/LexicalListPlugin';
+import { CheckListPlugin } from '@lexical/react/LexicalCheckListPlugin';
 import { LinkPlugin } from '@lexical/react/LexicalLinkPlugin';
 import { HorizontalRulePlugin } from '@lexical/react/LexicalHorizontalRulePlugin';
 import { TablePlugin } from '@lexical/react/LexicalTablePlugin';
@@ -27,6 +32,7 @@ import { EditorTheme } from './editor/theme';
 import SlashMenuPlugin from './editor/plugins/SlashMenuPlugin';
 import FloatingToolbarPlugin from './editor/plugins/FloatingToolbarPlugin';
 import DuplicateBlockPlugin from './editor/plugins/DuplicateBlockPlugin';
+import EditorToolbarPlugin from './editor/plugins/EditorToolbarPlugin';
 import DragHandlePlugin from './editor/plugins/DragHandlePlugin';
 import { SaveResult } from '../hooks/useAutosave';
 import { ShareModal } from './ShareModal';
@@ -41,8 +47,11 @@ interface EditorProps {
    * section rendered below the main content. Computed by the caller (App.tsx) via useMemo. */
   childNotes: Note[];
   onUpdateNote: (id: string, updates: Partial<Note>) => void;
+  onHydrateContent: (id: string, content: string) => void;
   onSave: (id: string, options?: { silent?: boolean }) => Promise<SaveResult>;
   onDeleteNote: (id: string) => void;
+  onRenewStorage?: (id: string) => Promise<void>;
+  onDiscardChanges?: (id: string) => Promise<void>;
   onRestoreNote?: (id: string) => void;
   onCreateNote: () => void;
   /** Creates a new note nested under parentNoteId and navigates to it ("+ New sub-page" row). */
@@ -66,6 +75,7 @@ interface EditorProps {
    *  Save button becomes the only save path) and the owner-only Share button/ShareModal are
    *  hidden. Default false = all existing behavior. */
   isSharedMode?: boolean;
+  preview?: boolean;
 }
 
 // Simple ErrorBoundary component
@@ -86,7 +96,7 @@ class SimpleErrorBoundary extends Component<SimpleErrorBoundaryProps, SimpleErro
     super(props);
   }
 
-  static getDerivedStateFromError(error: Error) {
+  static getDerivedStateFromError(_error: Error) {
     return { hasError: true };
   }
 
@@ -130,11 +140,11 @@ const EditorStateSynchronizer: React.FC<{ content: string | null | undefined; is
       if (safeContent.trim().startsWith('{')) {
         // Attempt to parse as JSON (new format)
         const state = editor.parseEditorState(safeContent);
-        editor.setEditorState(state);
+        editor.setEditorState(state, { tag: 'inkblob-load' });
       } else {
         throw new Error('Not JSON');
       }
-    } catch (e) {
+    } catch {
       // Fallback for legacy text OR empty new note
       editor.update(() => {
         const root = $getRoot();
@@ -146,7 +156,7 @@ const EditorStateSynchronizer: React.FC<{ content: string | null | undefined; is
           paragraph.append(text);
         }
         root.append(paragraph);
-      });
+      }, { tag: 'inkblob-load' });
     }
     setIsInitialized(true);
   }, [content, isLoading, hasValidBlobId, editor, isInitialized]);
@@ -160,8 +170,11 @@ export const Editor: React.FC<EditorProps> = ({
   folders,
   childNotes,
   onUpdateNote,
+  onHydrateContent,
   onSave,
   onDeleteNote,
+  onRenewStorage,
+  onDiscardChanges,
   onRestoreNote,
   onCreateNote,
   onCreateSubNote,
@@ -171,16 +184,26 @@ export const Editor: React.FC<EditorProps> = ({
   onBack,
   notebookId,
   readOnly = false,
-  isSharedMode = false
+  isSharedMode = false,
+  preview = false
 }) => {
   const [localTitle, setLocalTitle] = useState('');
+  const titleRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    const resize = () => { if (titleRef.current) { titleRef.current.style.height = 'auto'; titleRef.current.style.height = `${titleRef.current.scrollHeight}px`; } };
+    resize();
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, [localTitle, note?.id, note?.contentLoaded]);
+  const { data: verifiedEndEpoch } = useBlobRetention(note?.blobObjectId);
+  const [isRenewing, setIsRenewing] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   // DragHandlePlugin needs the actual DOM node (not a ref object) to anchor its portal to -
   // captured via a callback ref so it's available once the editor content div mounts.
   const [dragHandleAnchor, setDragHandleAnchor] = useState<HTMLDivElement | null>(null);
 
   // Load note content from Walrus
-  const { data: noteContent, isLoading: isContentLoading, error: contentError } = useNoteContent(note?.blobId);
+  const { data: noteContent, isLoading: isContentLoading, error: contentError } = useNoteContent(note?.blobId, !!note?.contentLoaded);
 
   const { isSaving, isDirty, saveNow } = useAutosave({
     noteId: note?.id ?? '',
@@ -192,8 +215,16 @@ export const Editor: React.FC<EditorProps> = ({
     // a debounce-triggered autosave would pop 1-3 wallet approval dialogs per cycle. Dirty
     // tracking stays on (status text + beforeunload warning); the Save button (saveNow) is the
     // only save path. See useAutosave's `enabled` doc comment.
-    enabled: !isSharedMode,
+    enabled: !isSharedMode && !readOnly,
+    ready: !!note?.contentLoaded && !contentError,
+    initiallyDirty: !!note?.hasDraft,
   });
+
+  useEffect(() => {
+    if (note && noteContent !== undefined && !note.contentLoaded && !contentError) {
+      onHydrateContent(note.id, noteContent);
+    }
+  }, [note, noteContent, contentError, onHydrateContent]);
 
   // Interleaved breadcrumb trail, outermost-to-innermost (matching the existing folder-only
   // breadcrumbs' root-to-leaf order): folder-ancestor crumbs for whichever note sits at the ROOT
@@ -279,7 +310,7 @@ export const Editor: React.FC<EditorProps> = ({
         >
           <ChevronLeft size={18} />
         </button>
-        <div className="p-6 rounded-full bg-red-500/10 border border-red-500/20 shadow-[0_0_30px_rgba(239,68,68,0.1)]">
+        <div className="p-6 rounded-full bg-red-500/10 border border-red-500/20 ">
           <Trash size={48} strokeWidth={1} className="text-red-400" />
         </div>
         <p className="font-medium text-lg">Failed to load note content</p>
@@ -307,14 +338,14 @@ export const Editor: React.FC<EditorProps> = ({
         >
           <ChevronLeft size={18} />
         </button>
-        <div className="p-6 rounded-full bg-web3-card border border-web3-border shadow-[0_0_30px_rgba(139,92,246,0.1)]">
+        <div className="p-6 rounded-full bg-web3-card border border-web3-border ">
           <PenLine size={48} strokeWidth={1} className="text-web3-primary" />
         </div>
         <p className="font-medium text-lg">Select a note to view</p>
         {!readOnly && (
           <button
             onClick={onCreateNote}
-            className="mt-2 px-6 py-2 rounded-full bg-web3-primary/10 text-web3-primary hover:bg-web3-primary/20 transition-all border border-web3-primary/20 hover:shadow-[0_0_15px_rgba(139,92,246,0.3)]"
+            className="mt-2 px-6 py-2 rounded-full bg-web3-primary/10 text-web3-primary hover:bg-web3-primary/20 transition-all border border-web3-primary/20 "
           >
             Create a new note
           </button>
@@ -329,7 +360,8 @@ export const Editor: React.FC<EditorProps> = ({
     onUpdateNote(note.id, { title: newVal, updatedAt: new Date() });
   };
 
-  const handleEditorChange = (editorState: EditorState) => {
+  const handleEditorChange = (editorState: EditorState, _editor: unknown, tags: Set<string>) => {
+    if (tags.has('inkblob-load') || readOnly) return;
     editorState.read(() => {
       const json = JSON.stringify(editorState);
       onUpdateNote(note.id, { content: json, updatedAt: new Date() });
@@ -346,10 +378,19 @@ export const Editor: React.FC<EditorProps> = ({
 
   return (
     <LexicalComposer initialConfig={initialConfig} key={note.id}>
-      <div className="flex-1 h-full flex flex-col backdrop-blur-sm bg-web3-card/10 relative">
+      <div className="writing-editor" onKeyDown={event => {
+        if (!readOnly && !event.nativeEvent.isComposing && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 's') { event.preventDefault(); void handleSave(); }
+      }}>
+        {!preview && <details className="editor-retention"><summary>Storage details</summary><div className="flex flex-wrap items-center gap-3 py-1">
+          <span>{(note.storageEndEpoch ?? verifiedEndEpoch) ? `Stored through Walrus epoch ${note.storageEndEpoch ?? verifiedEndEpoch}` : `Each save stores content for ${STORAGE_EPOCHS} Walrus epochs`}. Storage is time-limited.</span>
+          {!isSharedMode && note.blobObjectId && onRenewStorage && <button disabled={isRenewing} className="underline disabled:opacity-40"
+            onClick={async () => { setIsRenewing(true); try { await onRenewStorage(note.id); } finally { setIsRenewing(false); } }}>
+            {isRenewing ? 'Extending…' : `Extend by ${STORAGE_EPOCHS} epochs`}
+          </button>}
+        </div></details>}
         {/* Top Bar - Minimalist */}
-        <div className="h-12 flex items-center justify-between px-2 md:px-6 bg-transparent z-10">
-          <div className="flex items-center gap-1 text-xs text-web3-textMuted/70 font-medium min-w-0 overflow-hidden">
+        <div className="editor-toolbar">
+          <div className="flex items-center gap-1 text-xs text-web3-textMuted font-medium min-w-0 overflow-hidden">
             <button
               onClick={onBack}
               title="Back to notes"
@@ -373,22 +414,28 @@ export const Editor: React.FC<EditorProps> = ({
               </React.Fragment>
             ))}
           </div>
-          <div className="flex items-center gap-2 text-web3-textMuted">
+          <div className="flex items-center gap-1.5 text-web3-textMuted">
+            <button onClick={() => exportNote(note)} disabled={!note.contentLoaded}
+              title="Export an unencrypted local copy" aria-label="Export an unencrypted local copy"
+              className="p-1.5 rounded hover:bg-web3-cardHover disabled:opacity-40"><Download size={16} /></button>
             {readOnly ? (
               // Read-only shared mode: no save/delete/restore affordances at all - just an
               // always-visible chip making the mode obvious from within the editor itself.
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border border-yellow-500/40 bg-yellow-500/10 text-yellow-300">
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border border-yellow-500/40 bg-yellow-500/10 text-amber-900 dark:text-amber-200">
                 <Eye size={11} />
                 Read-only
               </span>
             ) : (
               <>
-                <span className="text-xs mr-2 opacity-50">
+                {isDirty && onDiscardChanges && <button disabled={isSaving} className="text-xs underline disabled:opacity-40"
+                  onClick={() => onDiscardChanges(note.id)}>Reload saved copy</button>}
+                <span className="editor-save-state mr-1 text-web3-textMuted" aria-live="polite">
+                  {!isDirty && !isSaving && <Check size={12} />}
                   {isSaving
                     ? 'Saving...'
                     : isDirty
-                      ? (isSharedMode ? 'Unsaved changes — autosave off, use Save' : 'Unsaved changes')
-                      : 'Saved'}
+                      ? (isSharedMode ? 'Unsaved changes; use Save' : 'Unsaved changes')
+                      : preview ? 'In this preview' : 'Saved'}
                 </span>
                 <button
                   onClick={handleSave}
@@ -425,31 +472,34 @@ export const Editor: React.FC<EditorProps> = ({
               </>
             )}
             {/* Share (grant/revoke access) is owner-only on-chain - hidden in BOTH shared modes. */}
-            {!isSharedMode && (
+            {!isSharedMode && !preview && (
               <button
                 onClick={() => setIsShareModalOpen(true)}
                 disabled={!notebookId}
-                className={`hover:text-web3-accent hover:bg-web3-accent/10 p-1.5 rounded-md transition-all ${!notebookId ? 'opacity-30 cursor-not-allowed' : ''}`}
+                className={`editor-share ${!notebookId ? 'opacity-30 cursor-not-allowed' : ''}`}
                 title={notebookId ? 'Share Notebook Access' : 'Notebook not ready yet'}
                 aria-label="Share notebook access"
               >
-                <Share size={16} />
+                <Share size={13} /><span>Share</span>
               </button>
             )}
           </div>
         </div>
 
+        {!readOnly && <EditorToolbarPlugin />}
         <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col relative">
           <div className="flex-1">
-            <div className="max-w-3xl mx-auto pt-12 px-12 pb-24">
+            <div className="editor-paper">
 
               <textarea
+                ref={titleRef}
                 value={localTitle}
                 onChange={readOnly ? () => undefined : handleTitleChange}
                 readOnly={readOnly}
                 placeholder="Untitled"
                 rows={1}
-                className="w-full text-5xl font-bold text-web3-text placeholder-web3-textMuted/20 resize-none border-none focus:ring-0 p-0 bg-transparent leading-tight mb-4 transition-all"
+                className="editor-title"
+                aria-label="Note title"
                 style={{ minHeight: '60px', overflow: 'hidden' }}
                 onInput={(e) => {
                   const target = e.target as HTMLTextAreaElement;
@@ -458,30 +508,27 @@ export const Editor: React.FC<EditorProps> = ({
                 }}
               />
 
-              <div className="text-xs text-web3-textMuted/60 mb-8 font-medium tracking-widest uppercase flex items-center gap-2">
-                <span>{formattedDate}</span>
-                <span>•</span>
-                <span>{note.content.length} chars</span>
-              </div>
+              <div className="editor-meta"><span><CalendarDays size={11} />{formattedDate}</span><span><Clock3 size={11} />{Math.max(1, Math.ceil(noteText(note.content).split(/\s+/).filter(Boolean).length / 200))} min read</span><span><LockKeyhole size={10} />{preview ? 'Preview' : 'Private'}</span></div>
 
-              <div className="relative min-h-[500px]" ref={setDragHandleAnchor}>
+              <div className="relative min-h-[320px]" ref={setDragHandleAnchor}>
                 <RichTextPlugin
-                  contentEditable={<ContentEditable className="outline-none min-h-[500px] text-lg text-web3-text/90" />}
-                  placeholder={<div className="absolute top-0 left-0 text-web3-textMuted/20 pointer-events-none text-lg select-none">Type '/' for commands...</div>}
+                  contentEditable={<ContentEditable className="editor-body" aria-label="Note content" />}
+                  placeholder={<div className="editor-placeholder">Type '/' for commands...</div>}
                   ErrorBoundary={SimpleErrorBoundary}
                 />
                 <HistoryPlugin />
                 <ListPlugin />
+                <CheckListPlugin />
                 <LinkPlugin />
                 <HorizontalRulePlugin />
-                <TablePlugin />
+                <TablePlugin hasHorizontalScroll />
                 <TabIndentationPlugin />
                 {/* Edit affordances - not mounted at all in read-only shared mode (an
                     editable:false editor must not offer slash menu/toolbars/drag handles, and
                     OnChangePlugin would only propagate programmatic loads back into note state). */}
                 {!readOnly && (
                   <>
-                    <MarkdownShortcutPlugin transformers={TRANSFORMERS} />
+                    <MarkdownShortcutPlugin transformers={[CHECK_LIST, ...TRANSFORMERS]} />
                     <OnChangePlugin onChange={handleEditorChange} />
                     <SlashMenuPlugin />
                     <FloatingToolbarPlugin />
@@ -489,14 +536,14 @@ export const Editor: React.FC<EditorProps> = ({
                     {dragHandleAnchor && <DragHandlePlugin anchorElem={dragHandleAnchor} />}
                   </>
                 )}
-                <EditorStateSynchronizer content={noteContent} isLoading={isContentLoading} hasValidBlobId={!!(note?.blobId && note.blobId.length > 10 && note.blobId !== 'temp_blob_id')} />
+                <EditorStateSynchronizer content={note.contentLoaded ? note.content : noteContent} isLoading={isContentLoading} hasValidBlobId={!!(note?.blobId && note.blobId.length > 10 && note.blobId !== 'temp_blob_id')} />
               </div>
 
               {/* Sub-pages - deliberately a plain list section rather than an inline Lexical
                   decorator node/block (see this feature's scope decision doc): notes whose
                   parentNoteId is this note's id, plus a row to create a new one. */}
               <div className="mt-12 pt-6 border-t border-web3-border/50">
-                <h3 className="text-xs font-semibold text-web3-textMuted/70 uppercase tracking-widest mb-3">
+                <h3 className="subpages-heading">
                   Sub-pages
                 </h3>
                 <div className="flex flex-col gap-1.5">

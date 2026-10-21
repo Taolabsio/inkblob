@@ -4,6 +4,12 @@ export interface Note {
   content: string; // May be empty until the note's Walrus blob content is fetched on demand
   folderId: string;
   updatedAt: Date;
+  revision?: string; // Confirmed on-chain revision, never a local timestamp.
+  contentLoaded?: boolean;
+  editVersion?: number;
+  hasDraft?: boolean;
+  blobObjectId?: string;
+  storageEndEpoch?: number;
   isPinned?: boolean;
   blobId: string; // Walrus blob ID for content retrieval; '' for a not-yet-saved note
   icon?: string;
