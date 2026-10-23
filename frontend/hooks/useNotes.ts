@@ -1,8 +1,9 @@
-import { useSuiClient } from '@mysten/dapp-kit';
+import { useSuiClient } from '../wallet';
 import { useQuery } from '@tanstack/react-query';
 import { decryptText } from '../crypto/decryption';
 import { SuiService } from '../services/suiService';
 import { Note } from '../types';
+import { withPlaceholderContent } from '../utils/noteState';
 import { useActiveNotebook } from './useActiveNotebook';
 
 export function useNotes() {
@@ -32,9 +33,10 @@ export function useNotes() {
                     });
 
                     // Extract common fields outside try-catch to avoid scope issues
-                    const noteId = rawNote.id || 'unknown';
+                    const noteId = rawNote.id?.id ?? rawNote.id ?? 'unknown';
                     const updatedAt = new Date(parseInt(rawNote.updated_at) || Date.now());
                     const blobId = rawNote.blob_id || '';
+                    const revision = rawNote.revision === undefined ? undefined : String(rawNote.revision);
                     const isDeleted = rawNote.is_deleted === true;
                     const walPaid = parseInt(rawNote.wal_paid) || 0;
                     const rebateClaimed = rawNote.rebate_claimed === true;
@@ -70,35 +72,39 @@ export function useNotes() {
                             });
 
                             // Return note with default title instead of throwing error
-                            return {
+                            return withPlaceholderContent({
                                 id: noteId,
                                 title: '[No Title]',
                                 content: '', // Content is in Walrus, not here
                                 folderId: folderId,
                                 updatedAt: updatedAt,
                                 blobId: blobId,
+                            revision,
+                            blobObjectId: rawNote.blob_object_id,
                                 isDeleted,
                                 parentNoteId,
                                 walPaid,
                                 rebateClaimed,
-                            } as Note;
+                            } as Note);
                         }
 
                         // Decrypt title - now we know title is a valid string
                         const title = await decryptText(rawNote.encrypted_title, encryptionKey);
 
-                        return {
+                        return withPlaceholderContent({
                             id: noteId,
                             title: title,
                             content: '', // Content is in Walrus, not here. We fetch on demand.
                             folderId: folderId,
                             updatedAt: updatedAt,
                             blobId: blobId,
+                            revision,
+                            blobObjectId: rawNote.blob_object_id,
                             isDeleted,
                             parentNoteId,
                             walPaid,
                             rebateClaimed,
-                        } as Note;
+                        } as Note);
                     } catch (e) {
                         // Enhanced error handling for decryption failures
                         const titlePreview = rawNote.encrypted_title ?
@@ -126,6 +132,8 @@ export function useNotes() {
                             folderId: folderId,
                             updatedAt: updatedAt,
                             blobId: blobId,
+                            revision,
+                            blobObjectId: rawNote.blob_object_id,
                             isDeleted,
                             parentNoteId,
                             walPaid,
@@ -137,7 +145,7 @@ export function useNotes() {
                 return decryptedNotes.filter((n): n is Note => n !== null);
             } catch (error) {
                 console.error('Error fetching notes:', error);
-                return [];
+                throw error;
             }
         },
         enabled: !!notebookId && !!encryptionKey,

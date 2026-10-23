@@ -1,4 +1,4 @@
-import { useCurrentAccount } from '@mysten/dapp-kit';
+import { useCurrentAccount } from '../wallet';
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useEncryption } from './EncryptionContext';
 import { PERMISSION_READ } from '../hooks/useSharedAccess';
@@ -74,7 +74,6 @@ export const ActiveNotebookProvider: React.FC<{ children: React.ReactNode }> = (
     return <ActiveNotebookContext.Provider value={value}>{children}</ActiveNotebookContext.Provider>;
 };
 
-// eslint-disable-next-line react-refresh/only-export-components -- same provider+hook file shape as every other context in this app; suppressed (rather than left as a new warning) to keep the project's exact lint-warning baseline
 export const useActiveNotebookContext = (): ActiveNotebookContextValue => {
     const context = useContext(ActiveNotebookContext);
     if (!context) {

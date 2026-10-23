@@ -1,10 +1,13 @@
-import { Archive, ChevronDown, ChevronRight, Folder as FolderIcon, Grid, Pencil, Plus, Settings, Trash2, Users } from 'lucide-react';
+import { FileText, LockKeyhole, Search, X, Archive, ChevronDown, ChevronRight, Folder as FolderIcon, Grid, Pencil, Plus, Settings, Trash2, Users } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Folder } from '../types';
+import { Brand } from './Brand';
 import { buildFolderTree, canNestUnder, reorderSiblingIds, TreeNode } from '../utils/folderTree';
 
 interface SidebarProps {
   folders: Folder[];
+  noteCount?: number;
+  preview?: boolean;
   selectedFolderId: string;
   onSelectFolder: (id: string) => void;
   onCreateFolder?: (parentId: string | null) => void;
@@ -42,6 +45,7 @@ function loadExpanded(): Record<string, boolean> {
 
 const getIcon = (iconName: string) => {
   switch (iconName) {
+    case 'file-text': return <FileText size={16} />;
     case 'trash': return <Trash2 size={16} />;
     case 'archive': return <Archive size={16} />;
     case 'smart': return <Grid size={16} />;
@@ -221,7 +225,7 @@ const FolderRow: React.FC<{
         }}
         onDragLeave={() => { if (isDropTarget) setDropTargetId(null); }}
         onDrop={props.readOnly ? undefined : handleDrop}
-        className={`group w-full flex items-center px-2 py-1.5 rounded-lg text-sm font-medium transition-all duration-150 ${selectedFolderId === node.id
+        className={`group relative w-full flex items-center px-2 py-1.5 rounded-lg text-sm font-medium transition-all duration-150 ${selectedFolderId === node.id
           ? 'bg-web3-primary/20 text-web3-primary'
           : 'text-web3-textMuted hover:bg-web3-cardHover hover:text-web3-text'
           } ${isBeingDragged ? 'opacity-40' : ''} ${isDropTarget ? 'ring-1 ring-web3-primary bg-web3-primary/10' : ''}`}
@@ -235,10 +239,7 @@ const FolderRow: React.FC<{
           {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
 
-        <button
-          onClick={() => props.onSelectFolder(node.id)}
-          className="flex items-center flex-1 min-w-0 gap-2 text-left"
-        >
+        <div className="flex items-center flex-1 min-w-0 gap-2 text-left">
           <span className={selectedFolderId === node.id ? 'text-web3-primary' : 'text-web3-textMuted'}>
             {getIcon(node.icon)}
           </span>
@@ -256,12 +257,12 @@ const FolderRow: React.FC<{
               className="flex-1 min-w-0 bg-web3-bg/60 rounded px-1 py-0.5 text-sm text-web3-text outline-none border border-web3-primary/40"
             />
           ) : (
-            <span className="truncate">{node.name}</span>
+            <button onClick={() => props.onSelectFolder(node.id)} aria-current={selectedFolderId === node.id ? 'page' : undefined} className="truncate text-left flex-1">{node.name}</button>
           )}
-        </button>
+        </div>
 
         {!isRenaming && !props.readOnly && (
-          <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+          <div className="folder-actions hidden group-hover:flex items-center gap-0.5 shrink-0">
             <button
               onClick={(e) => { e.stopPropagation(); props.onCreateFolder?.(node.id); }}
               title="New subfolder"
@@ -329,7 +330,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     setExpanded(prev => ({ ...prev, [id]: !(prev[id] ?? true) }));
   };
 
-  const tree = useMemo(() => buildFolderTree(folders), [folders]);
+  const tree = useMemo(() => buildFolderTree(folders.filter(folder => folder.type === 'user')), [folders]);
 
   const systemFolders = folders.filter(f => f.type === 'system' && f.id !== 'trash');
 
@@ -356,139 +357,36 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
 
   return (
     <>
-      {/* Mobile-only backdrop - the sidebar renders as a fixed drawer overlay below the md
-          breakpoint (no room for a persistent 3-pane layout on a phone-width screen); at md+
-          it's `md:static` and takes part in the normal flex row like before. */}
-      <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={onClose} />
-      <div className="fixed inset-y-0 left-0 z-40 w-64 bg-web3-card/95 md:bg-web3-card/30 h-full border-r border-web3-border/50 flex flex-col select-none transition-all duration-300 ease-in-out backdrop-blur-md shadow-2xl md:shadow-none md:static md:z-auto">
-      {/* Logo Section */}
-      <div className="p-4 border-b border-web3-border/30 bg-web3-card/20">
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <img src="/logo.png" alt="Inkblob Logo" className="w-8 h-8 object-contain drop-shadow-sm" />
-            <div className="absolute -inset-1 bg-web3-primary/20 rounded-full blur-md opacity-50"></div>
-          </div>
-          <div>
-            <span className="text-lg font-bold text-web3-text">Inkblob</span>
-            <div className="text-xs text-web3-textMuted">Secure DNotes</div>
-          </div>
+      <button className="sidebar-backdrop lg:hidden" onClick={onClose} aria-label="Close sidebar" />
+      <aside className="workspace-sidebar" aria-label="Notebook navigation">
+        <div className="sidebar-brand"><Brand /><button onClick={onClose} className="icon-button lg:hidden" aria-label="Close sidebar"><X size={17} /></button></div>
+        <div className="workspace-switcher"><span className="workspace-avatar">M</span><div><strong>My workspace</strong><span>{props.preview ? 'Preview notebook' : 'Personal notebook'}</span></div><LockKeyhole size={13} /></div>
+        <button className="sidebar-search" onClick={() => document.dispatchEvent(new CustomEvent('inkblob:search'))}><Search size={16} /><span>Quick search</span><kbd>⌘ K</kbd></button>
+        <nav className="sidebar-system" aria-label="Notes">
+          {systemFolders.map(folder => <button key={folder.id} onClick={() => onSelectFolder(folder.id)}
+            aria-current={selectedFolderId === folder.id ? 'page' : undefined}
+            className={`sidebar-nav-item ${selectedFolderId === folder.id ? 'is-active' : ''}`}>
+            {getIcon(folder.icon)}<span>{folder.name}</span>{props.noteCount != null && <span className="nav-count">{props.noteCount}</span>}
+          </button>)}
+        </nav>
+        <div className="sidebar-library custom-scrollbar" onDragOver={e => { if (drag) { e.preventDefault(); setRootIsDropTarget(true); } }}
+          onDragLeave={e => { if (e.currentTarget === e.target) setRootIsDropTarget(false); }} onDrop={handleRootDrop}>
+          <div className="sidebar-section-heading"><h3>Library</h3>{!readOnly && <button onClick={() => onCreateFolder?.(null)} title="New folder" aria-label="New folder" className="icon-button"><Plus size={15} /></button>}</div>
+          <FolderList nodes={tree} parentId={null} depth={0} folders={folders} selectedFolderId={selectedFolderId}
+            expanded={expanded} toggleExpanded={toggleExpanded} renamingId={renamingId} setRenamingId={setRenamingId}
+            drag={drag} setDrag={setDrag} dropTargetId={dropTargetId} setDropTargetId={setDropTargetId} props={props} />
+          {tree.length === 0 && <p className="sidebar-folder-hint">A little order for your ideas.<br />Create your first folder above.</p>}
+          {drag && <div className={`mt-2 h-10 rounded-lg border border-dashed flex items-center justify-center text-xs ${rootIsDropTarget ? 'border-web3-primary text-web3-primary bg-web3-primary/10' : 'border-web3-border text-web3-textMuted'}`}>Drop here to move to root</div>}
         </div>
-      </div>
-
-      {/* System folders (e.g. "Notes") */}
-      <div className="px-3 pt-3">
-        {systemFolders.map(folder => (
-          <button
-            key={folder.id}
-            onClick={() => onSelectFolder(folder.id)}
-            className={`w-full flex items-center gap-2 px-2 py-1.5 mb-1 rounded-lg text-sm font-medium transition-all ${selectedFolderId === folder.id
-              ? 'bg-web3-primary/20 text-web3-primary'
-              : 'text-web3-textMuted hover:bg-web3-cardHover hover:text-web3-text'
-              }`}
-          >
-            <span className={selectedFolderId === folder.id ? 'text-web3-primary' : 'text-web3-textMuted'}>
-              {getIcon(folder.icon)}
-            </span>
-            {folder.name}
-          </button>
-        ))}
-      </div>
-
-      <div
-        className="flex-1 overflow-y-auto custom-scrollbar px-3 pb-2"
-        onDragOver={(e) => { if (drag) { e.preventDefault(); setRootIsDropTarget(true); } }}
-        onDragLeave={(e) => { if (e.currentTarget === e.target) setRootIsDropTarget(false); }}
-        onDrop={handleRootDrop}
-      >
-        <div className="flex items-center justify-between px-1 mb-1">
-          <h3 className="text-xs font-bold text-web3-textMuted uppercase tracking-wider">Library</h3>
-          {!readOnly && (
-            <button
-              onClick={() => onCreateFolder?.(null)}
-              title="New folder"
-              aria-label="New folder"
-              className="p-1 rounded hover:bg-web3-cardHover text-web3-textMuted hover:text-web3-primary"
-            >
-              <Plus size={13} />
-            </button>
-          )}
+        <div className="sidebar-bottom">
+          {onOpenSharedWithMe && <button onClick={onOpenSharedWithMe} className="sidebar-nav-item"><Users size={16} /><span>Shared with me</span></button>}
+          {folders.some(f => f.id === 'trash') && <button onClick={() => onSelectFolder('trash')} aria-current={selectedFolderId === 'trash' ? 'page' : undefined}
+            className={`sidebar-nav-item ${selectedFolderId === 'trash' ? 'is-active' : ''}`}><Trash2 size={16} /><span>Trash</span></button>}
+          <button onClick={onOpenSettings} className="sidebar-nav-item"><Settings size={16} /><span>Settings</span></button>
+          <div className="sidebar-privacy"><LockKeyhole size={14} /><div><strong>{props.preview ? 'Make yourself at home' : 'Your words, your keys'}</strong><p>{props.preview ? 'Try writing. Changes stay in this preview until you leave.' : 'Encrypted in your browser. Only you hold the keys.'}</p></div></div>
+          <div className="sidebar-footnote">A home for your thoughts.</div>
         </div>
-
-        <FolderList
-          nodes={tree}
-          parentId={null}
-          depth={0}
-          folders={folders}
-          selectedFolderId={selectedFolderId}
-          expanded={expanded}
-          toggleExpanded={toggleExpanded}
-          renamingId={renamingId}
-          setRenamingId={setRenamingId}
-          drag={drag}
-          setDrag={setDrag}
-          dropTargetId={dropTargetId}
-          setDropTargetId={setDropTargetId}
-          props={props}
-        />
-
-        {drag && (
-          <div className={`mt-2 h-10 rounded-lg border border-dashed flex items-center justify-center text-xs transition-colors ${rootIsDropTarget ? 'border-web3-primary text-web3-primary bg-web3-primary/10' : 'border-web3-border text-web3-textMuted/60'
-            }`}>
-            Drop here to move to root
-          </div>
-        )}
-      </div>
-
-      {/* Bottom area */}
-      <div className="mt-auto p-4 border-t border-web3-border/30 flex flex-col gap-2">
-        <div
-          onClick={onOpenSettings}
-          className="flex items-center text-xs text-web3-textMuted justify-between cursor-pointer hover:text-web3-primary transition-colors group p-2 rounded hover:bg-web3-cardHover"
-        >
-          <span className="flex items-center gap-2">
-            <div className="p-1 rounded bg-web3-card border border-web3-border group-hover:border-web3-primary transition-colors">
-              <Settings size={12} />
-            </div>
-            Settings
-          </span>
-        </div>
-
-        {/* Shared With Me - discovery entry point for notebooks OTHER people have granted this
-            wallet access to (see SharedNotebooksModal / useSharedNotebooks). Distinct from the
-            per-notebook "Share" action in Editor.tsx (ShareModal), which is for granting access
-            to the user's OWN notebook. */}
-        {onOpenSharedWithMe && (
-          <div
-            onClick={onOpenSharedWithMe}
-            className="flex items-center text-xs text-web3-textMuted justify-between cursor-pointer hover:text-web3-primary transition-colors group p-2 rounded hover:bg-web3-cardHover"
-          >
-            <span className="flex items-center gap-2">
-              <div className="p-1 rounded bg-web3-card border border-web3-border group-hover:border-web3-primary transition-colors">
-                <Users size={12} />
-              </div>
-              Shared with me
-            </span>
-          </div>
-        )}
-
-        {/* Trash Item (Bottom) */}
-        {folders.find(f => f.id === 'trash') && (
-          <div
-            onClick={() => onSelectFolder('trash')}
-            className={`flex items-center text-xs justify-between cursor-pointer transition-colors group p-2 rounded hover:bg-web3-cardHover ${selectedFolderId === 'trash' ? 'text-red-400 bg-red-500/10' : 'text-web3-textMuted hover:text-red-400'
-              }`}
-          >
-            <span className="flex items-center gap-2">
-              <div className={`p-1 rounded bg-web3-card border border-web3-border transition-colors ${selectedFolderId === 'trash' ? 'border-red-400/50' : 'group-hover:border-red-400/50'
-                }`}>
-                <Trash2 size={12} />
-              </div>
-              Trash
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
+      </aside>
     </>
   );
 };

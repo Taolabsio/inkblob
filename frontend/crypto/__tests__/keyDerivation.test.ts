@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { toB64 } from '@mysten/sui/utils';
+import { describe, it, expect } from 'vitest';
+import { toBase64 } from '@mysten/sui/utils';
 import {
     deriveEncryptionKey,
     deriveHotWalletFromSignature,
@@ -8,7 +7,7 @@ import {
 } from '../keyDerivation';
 
 // Mock crypto.subtle for testing
-const mockSignature = toB64(new Uint8Array(64).fill(1));
+const mockSignature = toBase64(new Uint8Array(64).fill(1));
 const mockUserAddress = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
 const mockDeviceFingerprint = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 

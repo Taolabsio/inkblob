@@ -1,29 +1,8 @@
-import { SuiClient } from '@mysten/sui/client';
+import { InkBlobClient } from './chainClient';
 import { Transaction } from '@mysten/sui/transactions';
 
-// Package ID from environment variable (deployed contract address)
-export const PACKAGE_ID = (import.meta as any).env.VITE_SUI_PACKAGE_ID || '0x0';
-
-// Object id of the single global EncryptionKeyRegistry shared object (see
-// contracts/inkblob/sources/notebook.move's `init` - it is created and shared exactly once,
-// automatically, at package publish time). There is no per-notebook variant; like PACKAGE_ID
-// itself, this is a fixed deployment-time constant.
-//
-// Why an env var rather than a runtime lookup: the registry is created inside `init`, which
-// runs as part of the publish transaction, not a separate entry function call - so unlike
-// e.g. WalFeeReserveCreated (emitted by create_notebook, an entry function invoked once per
-// notebook and therefore query-able via queryEvents), nothing in this module ever emits an
-// event carrying the registry's object id, and there is exactly one instance system-wide, so
-// `getOwnedObjects` (which only lists objects owned by an address, not shared objects) cannot
-// find it either. Short of a dedicated indexer, the only genuinely reliable way to know a
-// shared singleton's id is to record it once at publish time - exactly how PACKAGE_ID is
-// already handled today. Set VITE_ENCRYPTION_KEY_REGISTRY_ID after publishing.
-export const ENCRYPTION_KEY_REGISTRY_ID = (import.meta as any).env.VITE_ENCRYPTION_KEY_REGISTRY_ID || null;
-
-// WAL package/coin type - reused here (in addition to SessionContext.tsx's existing usage) to
-// construct an `option::Option<Coin<WAL>>` PTB argument for update_note/update_note_with_session
-// when no real WAL payment is being made this call (see buildNoWalPaymentOption below).
-const WAL_PACKAGE_ID = (import.meta as any).env.VITE_WAL_PACKAGE_ID || '0x8270feb7375eee355e64fdb69c50abb6b5f9393a722883c1cf45f8e26048810a';
+import { PACKAGE_ID, ENCRYPTION_KEY_REGISTRY_ID, WAL_PACKAGE_ID } from '../config/network';
+export { PACKAGE_ID, ENCRYPTION_KEY_REGISTRY_ID };
 const WAL_COIN_TYPE = `0x2::coin::Coin<${WAL_PACKAGE_ID}::wal::WAL>`;
 
 // Mirrors contracts/inkblob/sources/notebook.move's WAL_STORAGE_FEE_PER_MB / WAL_MIN_PAYMENT
@@ -58,7 +37,7 @@ export function bytesToBlobSizeMb(byteLength: number): number {
 console.log('[SuiService] Using PACKAGE_ID:', PACKAGE_ID);
 
 export class SuiService {
-    constructor(private client: SuiClient) { }
+    constructor(private client: InkBlobClient) { }
 
     /**
      * Query owned NotebookRegistry
@@ -333,9 +312,10 @@ export class SuiService {
         encryptedTitle: string,
         folderId: string | null,
         parentNoteId: string | null,
-        expectedUpdatedAt: number | null,
+        expectedRevision: string | null,
         walCoinId: string | null = null,
-        blobSizeMb: number | null = null
+        blobSizeMb: number | null = null,
+        blobObjectId = ''
     ): Transaction {
         const tx = new Transaction();
         const notebook = tx.object(notebookId);
@@ -350,11 +330,11 @@ export class SuiService {
                 reserve,
                 tx.pure.address(noteId),
                 tx.pure.string(blobId),
-                tx.pure.string("temp_blob_object_id"), // Will be populated with actual blob object ID
+                tx.pure.string(blobObjectId),
                 tx.pure.string(encryptedTitle),
                 folderId && this.isValidAddress(folderId) ? tx.pure.option('address', folderId) : tx.pure.option('address', null),
                 parentNoteId && this.isValidAddress(parentNoteId) ? tx.pure.option('address', parentNoteId) : tx.pure.option('address', null),
-                tx.pure.option('u64', expectedUpdatedAt === null ? null : expectedUpdatedAt),
+                tx.pure.option('u64', expectedRevision === null ? null : expectedRevision),
                 // walCoinId/blobSizeMb both null (the default) preserves the previous
                 // option::none()/option::none() behavior - skips WAL accounting entirely for
                 // this save, which the contract treats as valid (e.g. a metadata-only edit).
@@ -378,9 +358,10 @@ export class SuiService {
         encryptedTitle: string,
         folderId: string | null,
         parentNoteId: string | null,
-        expectedUpdatedAt: number | null,
+        expectedRevision: string | null,
         walCoinId: string | null = null,
-        blobSizeMb: number | null = null
+        blobSizeMb: number | null = null,
+        blobObjectId = ''
     ): Transaction {
         const tx = new Transaction();
         const notebook = tx.object(notebookId);
@@ -397,11 +378,11 @@ export class SuiService {
                 sessionCap,
                 tx.pure.address(noteId),
                 tx.pure.string(blobId),
-                tx.pure.string("temp_blob_object_id"), // Will be populated with actual blob object ID
+                tx.pure.string(blobObjectId),
                 tx.pure.string(encryptedTitle),
                 folderId && this.isValidAddress(folderId) ? tx.pure.option('address', folderId) : tx.pure.option('address', null),
                 parentNoteId && this.isValidAddress(parentNoteId) ? tx.pure.option('address', parentNoteId) : tx.pure.option('address', null),
-                tx.pure.option('u64', expectedUpdatedAt === null ? null : expectedUpdatedAt),
+                tx.pure.option('u64', expectedRevision === null ? null : expectedRevision),
                 // See updateNoteTx's comment - null/null preserves the previous no-payment behavior.
                 blobSizeMbArg,
                 walPaymentArg,
@@ -502,20 +483,7 @@ export class SuiService {
         }
 
         tx.setSender(keypair.toSuiAddress());
-
-        const { bytes, signature } = await tx.sign({
-            client: this.client,
-            signer: keypair
-        });
-
-        return this.client.executeTransactionBlock({
-            transactionBlock: bytes,
-            signature,
-            options: {
-                showEffects: true,
-                showEvents: true,
-            },
-        });
+        return this.client.executeWithSigner(tx, keypair);
     }
     /**
      * Fetch all notes from the Notebook
@@ -1007,82 +975,30 @@ export class SuiService {
      * display label instead of a real name.
      */
     async fetchNotebooksSharedWithMe(granteeAddress: string): Promise<Array<{
-        notebookId: string;
-        notebookName: string | null;
-        permission: number;
-        expiresAt: string | null;
+        notebookId: string; notebookName: string | null; permission: number; expiresAt: string | null;
     }>> {
-        const normalizedGrantee = granteeAddress.toLowerCase();
-        // Distinct notebook_ids that have ever emitted an AccessGranted event naming this
-        // grantee - just the candidate set. Per-grant permission/expiry is deliberately NOT
-        // taken from the event here; it's re-derived from the live permissions Table below,
-        // which is the actual source of truth (event history includes grants later revoked).
-        const candidateNotebookIds = new Set<string>();
-
-        try {
-            let cursor: any = null;
-            let hasNextPage = true;
-
-            while (hasNextPage) {
-                const result = await this.client.queryEvents({
-                    query: { MoveEventType: `${PACKAGE_ID}::notebook::AccessGranted` },
-                    cursor,
-                    order: 'ascending',
-                });
-
-                for (const event of result.data) {
-                    const parsed = event.parsedJson as any;
-                    if (!parsed) continue;
-                    if (String(parsed.grantee).toLowerCase() !== normalizedGrantee) continue;
-
-                    candidateNotebookIds.add(parsed.notebook_id);
-                }
-
-                cursor = result.nextCursor;
-                hasNextPage = result.hasNextPage;
+        const ids = new Set<string>();
+        let cursor: string | null = null;
+        do {
+            const page = await this.client.getOwnedObjects({ owner: granteeAddress,
+                filter: { StructType: `${PACKAGE_ID}::notebook::SharedAccess` }, cursor });
+            for (const receipt of page.data) {
+                const id = receipt.data.content.fields?.notebook_id;
+                if (typeof id === 'string') ids.add(id);
             }
-        } catch (error) {
-            console.error('[SuiService] Error querying AccessGranted events for grantee:', error);
-            return [];
+            cursor = page.hasNextPage ? page.nextCursor : null;
+        } while (cursor);
+        const result = [];
+        for (const notebookId of ids) {
+            const permissions = await this.fetchNotebookPermissions(notebookId);
+            const grant = permissions.find(entry => entry.address.toLowerCase() === granteeAddress.toLowerCase());
+            if (!grant || (grant.expiresAt !== '18446744073709551615' && Number(grant.expiresAt) <= Date.now())) continue;
+            result.push({ notebookId, notebookName: null, permission: grant.permission,
+                expiresAt: grant.expiresAt === '18446744073709551615' ? null : grant.expiresAt });
         }
-
-        if (candidateNotebookIds.size === 0) return [];
-
-        // Cross-check each candidate against the notebook's LIVE permissions Table - event
-        // history alone can't distinguish a still-active grant from one that was later revoked
-        // or has since expired.
-        const now = Date.now();
-        const results = await Promise.all(
-            Array.from(candidateNotebookIds).map(async (notebookId) => {
-                try {
-                    const livePermissions = await this.fetchNotebookPermissions(notebookId);
-                    const liveGrant = livePermissions.find(
-                        (g) => g.address.toLowerCase() === normalizedGrantee
-                    );
-                    if (!liveGrant) return null; // revoked, or notebook fetch found no matching entry
-
-                    const NO_EXPIRY_SENTINEL = '18446744073709551615';
-                    const isNoExpiry = !liveGrant.expiresAt || liveGrant.expiresAt === NO_EXPIRY_SENTINEL;
-                    if (!isNoExpiry) {
-                        const expiresAtMs = Number(liveGrant.expiresAt);
-                        if (expiresAtMs <= now) return null; // expired - inert even though the table entry lingers
-                    }
-
-                    return {
-                        notebookId,
-                        notebookName: null, // see doc comment: not fetchable from the grantee's side
-                        permission: liveGrant.permission,
-                        expiresAt: isNoExpiry ? null : liveGrant.expiresAt,
-                    };
-                } catch (error) {
-                    console.error('[SuiService] Error verifying live permissions for notebook:', notebookId, error);
-                    return null;
-                }
-            })
-        );
-
-        return results.filter((r): r is { notebookId: string; notebookName: string | null; permission: number; expiresAt: string | null } => r !== null);
+        return result;
     }
+
 
     /**
      * Look up the shared WalFeeReserve object id for a notebook, by querying the
@@ -1094,32 +1010,13 @@ export class SuiService {
      * this id first.
      */
     async fetchWalFeeReserveId(notebookId: string): Promise<string | null> {
-        try {
-            let cursor: any = null;
-            let hasNextPage = true;
-
-            while (hasNextPage) {
-                const result = await this.client.queryEvents({
-                    query: { MoveEventType: `${PACKAGE_ID}::notebook::WalFeeReserveCreated` },
-                    cursor,
-                });
-
-                for (const event of result.data) {
-                    const parsed = event.parsedJson as any;
-                    if (parsed && parsed.notebook_id === notebookId) {
-                        return parsed.reserve_id;
-                    }
-                }
-
-                cursor = result.nextCursor;
-                hasNextPage = result.hasNextPage;
-            }
-        } catch (error) {
-            console.error('[SuiService] Error querying WalFeeReserveCreated events:', error);
-        }
-
-        return null;
+        const notebook = await this.fetchNotebook(notebookId);
+        const value = notebook.data?.content?.fields?.wal_fee_reserve_id;
+        const id = typeof value === 'string' ? value : value?.fields?.vec?.[0];
+        if (!id) throw new Error('Notebook upgrade required: storage reserve is missing');
+        return id;
     }
+
 
     /**
      * Grant another address read or write access to this notebook (Move: grant_access).
@@ -1223,7 +1120,7 @@ export class SuiService {
                 options: { showType: true },
             });
             const expectedType = `${PACKAGE_ID}::notebook::EncryptionKeyRegistry`;
-            if (result.data?.type && result.data.type !== expectedType) {
+            if (result.data?.type && result.data.type.replace(/^0x0+/, '0x') !== expectedType.replace(/^0x0+/, '0x')) {
                 console.error(
                     '[SuiService] VITE_ENCRYPTION_KEY_REGISTRY_ID does not resolve to an ' +
                     `EncryptionKeyRegistry (found type "${result.data.type}", expected ` +
@@ -1246,8 +1143,11 @@ export class SuiService {
      */
     async fetchEncryptionPublicKey(registryId: string, addr: string): Promise<Uint8Array | null> {
         try {
+            const registry = await this.fetchNotebook(registryId);
+            const tableId = registry.data?.content?.fields?.keys?.fields?.id?.id;
+            if (!tableId) throw new Error('Encryption registry has no key table');
             const result = await this.client.getDynamicFieldObject({
-                parentId: registryId,
+                parentId: tableId,
                 name: {
                     type: 'address',
                     value: addr,
@@ -1315,38 +1215,18 @@ export class SuiService {
      * @param sharedAccessObjectId - the object id of the grantee's owned SharedAccess capability
      *   (transferred to them by grant_access), consumed/deleted by this call.
      */
-    revokeAccessTx(
-        notebookId: string,
-        sharedAccessObjectId: string
-    ): Transaction {
+    revokeAccessTx(notebookId: string, granteeAddress: string): Transaction {
         const tx = new Transaction();
-        const notebook = tx.object(notebookId);
-        const sharedAccess = tx.object(sharedAccessObjectId);
-
-        tx.moveCall({
-            target: `${PACKAGE_ID}::notebook::revoke_access`,
-            arguments: [
-                notebook,
-                sharedAccess,
-            ],
-        });
-
+        tx.moveCall({ target: `${PACKAGE_ID}::notebook::revoke_access_by_address`,
+            arguments: [tx.object(notebookId), tx.pure.address(granteeAddress)] });
         return tx;
     }
 
-    /**
-     * Subscribe to Notebook events
-     */
-    async subscribeToEvents(
-        onMessage: (event: any) => void
-    ): Promise<() => void> {
-        const unsubscribe = await this.client.subscribeEvent({
-            filter: { Package: PACKAGE_ID } as any, // Cast to any to bypass strict type check if SDK version mismatch
-            onMessage: (event) => {
-                onMessage(event);
-            },
-        });
-
-        return unsubscribe;
+    revokeSessionTx(notebookId: string, sessionCapId: string): Transaction {
+        const tx = new Transaction();
+        tx.moveCall({ target: `${PACKAGE_ID}::notebook::revoke_session_by_id`,
+            arguments: [tx.object(notebookId), tx.pure.address(sessionCapId)] });
+        return tx;
     }
+
 }

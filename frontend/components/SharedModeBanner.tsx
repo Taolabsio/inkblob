@@ -38,8 +38,8 @@ export const SharedModeBanner: React.FC<SharedModeBannerProps> = ({
                 <span
                     className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${
                         isReadOnly
-                            ? 'border-yellow-500/40 bg-yellow-500/10 text-yellow-300'
-                            : 'border-green-500/40 bg-green-500/10 text-green-300'
+                            ? 'border-yellow-500/40 bg-yellow-500/10 text-amber-900 dark:text-amber-200'
+                            : 'border-green-500/40 bg-green-500/10 text-web3-accent'
                     }`}
                 >
                     {isReadOnly ? <Eye size={11} /> : <PenLine size={11} />}

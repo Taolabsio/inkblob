@@ -1,11 +1,11 @@
-import { useSignAndExecuteTransaction } from '@mysten/dapp-kit';
-import { AlertTriangle, ShieldAlert, Trash2 } from 'lucide-react';
+import { useSignAndExecuteTransaction } from '../wallet';
+import { ShieldAlert, Trash2 } from 'lucide-react';
 import React, { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Modal } from './Modal';
 import { useEncryption } from '../context/EncryptionContext';
 import { useToast } from '../context/ToastContext';
-import { deriveEncryptionKeyRawBits, wrapContentKeyForGrantee } from '../crypto/keySharing';
+import { deriveNotebookKeyRawBits, wrapContentKeyForGrantee } from '../crypto/keySharing';
 import { PERMISSION_READ, PERMISSION_WRITE, useSharedAccess } from '../hooks/useSharedAccess';
 import { useSuiService } from '../hooks/useSuiService';
 import { sanitizeWeb3Error } from '../utils/toastUtils';
@@ -48,7 +48,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, noteboo
     // grantee (see handleGrant below) - lastSignature/lastUserAddress are the SAME cached
     // owner wallet signature/address deriveEncryptionKey already used, reused here only to
     // independently re-derive the identical key bytes in extractable form via
-    // deriveEncryptionKeyRawBits (see keySharing.ts) - never touches encryptionKey itself.
+    // deriveNotebookKeyRawBits (see keySharing.ts) - never touches encryptionKey itself.
     const { lastSignature, lastUserAddress } = useEncryption();
 
     const resetForm = () => {
@@ -87,8 +87,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, noteboo
                 if (!granteePublicKey) {
                     granteeHasNoRegisteredKey = true;
                 } else if (lastSignature && lastUserAddress) {
-                    const ownerRawKey = await deriveEncryptionKeyRawBits(lastSignature, lastUserAddress);
-                    wrappedKey = await wrapContentKeyForGrantee(ownerRawKey, granteePublicKey);
+                    const ownerRawKey = await deriveNotebookKeyRawBits(lastSignature, lastUserAddress, notebookId);
+                    try { wrappedKey = await wrapContentKeyForGrantee(ownerRawKey, granteePublicKey); }
+                    finally { ownerRawKey.fill(0); }
                 } else {
                     // Grantee has a registered public key, but we have no cached owner
                     // signature to derive the content key from (should not normally happen
@@ -128,15 +129,15 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, noteboo
         }
     };
 
-    const handleRevoke = async (sharedAccessObjectId: string, address: string) => {
+    const handleRevoke = async (address: string) => {
         if (!notebookId) return;
 
         setRevokingAddress(address);
         try {
-            const tx = suiService.revokeAccessTx(notebookId, sharedAccessObjectId);
+            const tx = suiService.revokeAccessTx(notebookId, address);
             await signAndExecuteTransaction({ transaction: tx });
 
-            toast.success('Access Revoked', `${address.slice(0, 6)}...${address.slice(-4)} no longer has access to this notebook.`);
+            toast.success('Access Revoked', `${address.slice(0, 6)}...${address.slice(-4)} can no longer write to this notebook. Previously shared content and encryption keys cannot be taken back.`);
             queryClient.invalidateQueries({ queryKey: ['sharedAccess', notebookId] });
         } catch (error) {
             console.error('Failed to revoke access:', error);
@@ -148,12 +149,14 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, noteboo
     };
 
     return (
-        <Modal isOpen={isOpen} onClose={handleClose} title="Share Notebook Access" className="w-full max-w-lg">
+        <Modal isOpen={isOpen} onClose={handleClose} title="Share Notebook" className="w-full max-w-lg">
             <div className="flex flex-col gap-4">
                 {/* Prominent, unmissable disclaimer - do not remove or soften this copy. */}
-                <div className="flex gap-3 p-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 text-yellow-200">
-                    <ShieldAlert size={20} className="shrink-0 mt-0.5 text-yellow-400" />
+                <div className="flex gap-3 p-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 text-amber-900 dark:text-amber-200">
+                    <ShieldAlert size={20} className="shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" />
                     <p className="text-sm leading-snug">
+                        Sharing covers this entire notebook. Recipients can retain decrypted copies.
+                        Revocation stops writes; it cannot erase content or keys they already received.
                         This grants on-chain write/read <strong>permission</strong> to this notebook, and
                         also shares a copy of the content-encryption key with the recipient <strong>if</strong>{' '}
                         they have already opened InkBlob and connected their wallet at least once. If they
@@ -256,9 +259,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, noteboo
                                             {grant.isExpired ? ' - expired' : ''}
                                         </p>
                                     </div>
-                                    {grant.sharedAccessObjectId ? (
+                                    {(
                                         <button
-                                            onClick={() => handleRevoke(grant.sharedAccessObjectId!, grant.address)}
+                                            onClick={() => handleRevoke(grant.address)}
                                             disabled={revokingAddress === grant.address}
                                             title="Revoke access"
                                             aria-label={`Revoke access for ${grant.address}`}
@@ -268,13 +271,6 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, noteboo
                                         >
                                             <Trash2 size={15} />
                                         </button>
-                                    ) : (
-                                        <span
-                                            title="Could not locate the on-chain capability object for this grant (event history unavailable) - it cannot be revoked from this UI."
-                                            className="shrink-0 p-1.5 text-web3-textMuted/50"
-                                        >
-                                            <AlertTriangle size={15} />
-                                        </span>
                                     )}
                                 </li>
                             ))}

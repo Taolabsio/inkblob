@@ -27,12 +27,12 @@
  * frontend/crypto/encryption.ts encryptContent for consistency.
  */
 
-import { fromB64 } from '@mysten/sui/utils';
+import { fromBase64 } from '@mysten/sui/utils';
 
 // ---------------------------------------------------------------------------
 // Small local base64url helper (JWK "x"/"d" fields are base64url, not base64).
 // No base64url utility exists elsewhere in this codebase (checked @mysten/sui/utils
-// and @mysten/bcs - both only expose standard base64 fromB64/toB64), so we implement
+// and @mysten/bcs - both only expose standard base64 fromBase64/toBase64), so we implement
 // a minimal decoder here, scoped to this file.
 // ---------------------------------------------------------------------------
 function base64UrlToBytes(base64url: string): Uint8Array {
@@ -90,13 +90,14 @@ function seedToPkcs8(seed32: Uint8Array): ArrayBuffer {
  */
 export async function deriveEncryptionKeyRawBits(
     signature: string,
-    userAddress: string
+    userAddress: string,
+    context = 'aes-256-gcm-key'
 ): Promise<Uint8Array> {
     if (!userAddress || !/^0x[a-fA-F0-9]{64}$/.test(userAddress)) {
         throw new Error('Invalid SUI address format. Expected 0x + 64 hex characters.');
     }
 
-    const signatureBytes = fromB64(signature);
+    const signatureBytes = fromBase64(signature);
 
     const keyMaterial = await crypto.subtle.importKey(
         'raw',
@@ -113,13 +114,25 @@ export async function deriveEncryptionKeyRawBits(
             name: 'HKDF',
             hash: 'SHA-256',
             salt: userSpecificSalt,
-            info: new TextEncoder().encode('aes-256-gcm-key'),
+            info: new TextEncoder().encode(context),
         },
         keyMaterial,
         256
     );
 
     return new Uint8Array(bits);
+}
+
+/** Each notebook gets a separate key; sharing one never reveals other notebooks. */
+export async function deriveNotebookKeyRawBits(signature: string, userAddress: string, notebookId: string) {
+    if (!/^0x[\da-f]{64}$/i.test(notebookId)) throw new Error('Invalid notebook id');
+    return deriveEncryptionKeyRawBits(signature, userAddress, `InkBlob-notebook-v2:${notebookId.toLowerCase()}`);
+}
+
+export async function deriveNotebookKey(signature: string, userAddress: string, notebookId: string) {
+    const raw = await deriveNotebookKeyRawBits(signature, userAddress, notebookId);
+    try { return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']); }
+    finally { raw.fill(0); }
 }
 
 /**
@@ -138,7 +151,7 @@ export async function deriveEncryptionKeyRawBits(
 export async function deriveX25519KeyPair(
     signature: string
 ): Promise<{ privateKey: CryptoKey; publicKeyRaw: Uint8Array }> {
-    const signatureBytes = fromB64(signature);
+    const signatureBytes = fromBase64(signature);
 
     const keyMaterial = await crypto.subtle.importKey(
         'raw',

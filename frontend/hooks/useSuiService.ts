@@ -1,4 +1,4 @@
-import { useSuiClient } from '@mysten/dapp-kit';
+import { useSuiClient } from '../wallet';
 import { useMemo } from 'react';
 import { SuiService } from '../services/suiService';
 

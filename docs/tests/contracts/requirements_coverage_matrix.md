@@ -1,3 +1,5 @@
+> Historical document (2025-11-23). Claims below are not a certification of the current build. Use executable tests and the v2 release acceptance guide for present readiness.
+
 # Requirements Coverage Matrix
 
 **Version:** 1.0

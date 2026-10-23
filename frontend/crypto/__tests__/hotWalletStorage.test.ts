@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { fromB64, toB64 } from '@mysten/sui/utils';
+import { fromBase64, toBase64 } from '@mysten/sui/utils';
 import { deriveEncryptionKey, KEY_DERIVATION_MESSAGE } from '../keyDerivation';
 import {
     storeHotWallet,
@@ -43,7 +43,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
         it('should store encrypted hot wallet in localStorage', async () => {
             // Generate a test keypair
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
 
             // Store encrypted
             await storeHotWallet(
@@ -68,13 +68,13 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
             expect(data.iv).toBeTruthy();
 
             // Private key should be encrypted (not plaintext)
-            const rawPrivateKey = toB64(keypair.getSecretKey());
+            const rawPrivateKey = keypair.getSecretKey();
             expect(data.encryptedPrivateKey).not.toBe(rawPrivateKey);
         });
 
         it('should retrieve and decrypt hot wallet', async () => {
             const originalKeypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
 
             // Store
             await storeHotWallet(
@@ -103,7 +103,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
         });
 
         it('should return null for non-existent hot wallet', async () => {
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
 
             const result = await retrieveHotWallet(
                 mockFingerprint,
@@ -116,13 +116,13 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
 
         it('encrypts the stored hot wallet under a key distinct from the note-content encryption key (security fix)', async () => {
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
 
             await storeHotWallet(keypair, mockFingerprint, mockExpiresAt, mockSignature, mockUserAddress);
 
             const stored = JSON.parse(localStorage.getItem(`inkblob_hot_wallet_${mockFingerprint}`)!);
-            const iv = fromB64(stored.iv);
-            const ciphertext = fromB64(stored.encryptedPrivateKey);
+            const iv = fromBase64(stored.iv);
+            const ciphertext = fromBase64(stored.encryptedPrivateKey);
 
             // Derive the note-CONTENT encryption key from the same signature/address and attempt
             // to decrypt the hot-wallet blob with it - this must fail (AES-GCM auth tag mismatch),
@@ -135,7 +135,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
 
         it('should return null for expired hot wallet', async () => {
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
             const pastExpiration = Date.now() - 1000; // Expired 1 second ago
 
             await storeHotWallet(
@@ -161,7 +161,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
 
         it('should return null for fingerprint mismatch', async () => {
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
 
             await storeHotWallet(
                 keypair,
@@ -184,8 +184,8 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
 
         it('should fail decryption with wrong signature', async () => {
             const keypair = new Ed25519Keypair();
-            const correctSignature = toB64(new Uint8Array(64).fill(42));
-            const wrongSignature = toB64(new Uint8Array(64).fill(99));
+            const correctSignature = toBase64(new Uint8Array(64).fill(42));
+            const wrongSignature = toBase64(new Uint8Array(64).fill(99));
 
             await storeHotWallet(
                 keypair,
@@ -213,7 +213,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
     describe('Clear Hot Wallet', () => {
         it('should clear hot wallet from storage', async () => {
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
 
             await storeHotWallet(
                 keypair,
@@ -235,7 +235,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
     describe('Validation Helpers', () => {
         it('hasValidStoredHotWallet should return true for valid session', async () => {
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
 
             await storeHotWallet(
                 keypair,
@@ -251,7 +251,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
 
         it('hasValidStoredHotWallet should return false for expired session', async () => {
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
             const pastExpiration = Date.now() - 1000;
 
             await storeHotWallet(
@@ -268,7 +268,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
 
         it('getHotWalletInfo should return address and expiration', async () => {
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
 
             await storeHotWallet(
                 keypair,
@@ -291,7 +291,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
 
         it('getHotWalletInfo should return null for expired session', async () => {
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
             const pastExpiration = Date.now() - 1000;
 
             await storeHotWallet(
@@ -312,8 +312,8 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
             // This is implicit in the implementation, but we can verify
             // that different signatures produce different encryption results
             const keypair = new Ed25519Keypair();
-            const signature1 = toB64(new Uint8Array(64).fill(1));
-            const signature2 = toB64(new Uint8Array(64).fill(2));
+            const signature1 = toBase64(new Uint8Array(64).fill(1));
+            const signature2 = toBase64(new Uint8Array(64).fill(2));
 
             // Store with signature1
             await storeHotWallet(
@@ -344,7 +344,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
 
         it('should include user address in encryption key derivation', async () => {
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
             const userAddress1 = '0x' + '1'.repeat(64);
             const userAddress2 = '0x' + '2'.repeat(64);
 
@@ -370,7 +370,7 @@ describe('Hot Wallet Storage (CRYPTO-4 Security Fix)', () => {
 
         it('should verify address after decryption', async () => {
             const keypair = new Ed25519Keypair();
-            const mockSignature = toB64(new Uint8Array(64).fill(42));
+            const mockSignature = toBase64(new Uint8Array(64).fill(42));
 
             await storeHotWallet(
                 keypair,

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Clock, Wallet, CheckCircle, AlertCircle, X } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useCurrentAccount, useSuiClient } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSuiClient } from '../wallet';
 import { useSession } from '../context/SessionContext';
 import { useSettings } from '../context/SettingsContext';
 

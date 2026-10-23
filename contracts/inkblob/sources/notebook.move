@@ -45,7 +45,7 @@ module inkblob::notebook {
     const E_WAL_TREASURY_NOT_FOUND: u64 = 23;   // WAL treasury not found
 
     // Concurrency control errors
-    const E_VERSION_MISMATCH: u64 = 24;  // expected_updated_at did not match the note's current updated_at (concurrent edit conflict)
+    const E_VERSION_MISMATCH: u64 = 24;  // expected_revision did not match the note's current revision (concurrent edit conflict)
 
     // Note nesting (page-in-page) errors
     const E_MAX_NOTE_DEPTH: u64 = 25;          // Note depth exceeds max nesting level
@@ -109,6 +109,8 @@ module inkblob::notebook {
         // table stores ONLY ciphertext produced client-side; the contract never sees, and
         // has no way to derive, any actual content-encryption key material.
         wrapped_content_keys: Table<address, vector<u8>>,
+        revoked_sessions: Table<ID, bool>,
+        wal_fee_reserve_id: option::Option<ID>,
     }
 
     /// Table value paired with each granted address: the permission level and an optional
@@ -177,6 +179,7 @@ module inkblob::notebook {
         encrypted_title: string::String,
         folder_id: option::Option<ID>,
         parent_note_id: option::Option<ID>,
+        revision: u64,
         created_at: u64,
         updated_at: u64,
         is_deleted: bool,
@@ -363,6 +366,12 @@ module inkblob::notebook {
 
     /// Emitted when access is revoked, either by the owner (revoke_access) or by the
     /// grantee themselves (leave_shared_notebook).
+    public struct AccessRevokedByAddress has copy, drop {
+        notebook_id: ID,
+        grantee: address,
+        revoked_by: address,
+    }
+
     public struct AccessRevoked has copy, drop {
         notebook_id: ID,
         shared_access_id: ID,
@@ -558,6 +567,8 @@ module inkblob::notebook {
 
             // Verify session cap belongs to this notebook
             assert!(cap.notebook_id == object::uid_to_inner(&notebook.id), E_WRONG_NOTEBOOK);
+
+            assert!(!table::contains(&notebook.revoked_sessions, object::uid_to_inner(&cap.id)), E_SESSION_EXPIRED);
 
             // Verify session cap is not expired
             let now = tx_context::epoch_timestamp_ms(ctx);
@@ -761,6 +772,7 @@ module inkblob::notebook {
             encrypted_title: string::utf8(b"encrypted_title"),
             folder_id: option::none(),
             parent_note_id,
+            revision: 0,
             created_at: 1000000,
             updated_at: 1000000,
             is_deleted: false,
@@ -781,13 +793,15 @@ module inkblob::notebook {
         let now = tx_context::epoch_timestamp_ms(ctx);
 
         // Create shared Notebook object
-        let notebook = Notebook {
+        let mut notebook = Notebook {
             id: object::new(ctx),
             owner: sender,
             notes: table::new(ctx),
             folders: table::new(ctx),
             permissions: table::new(ctx),
             wrapped_content_keys: table::new(ctx),
+            revoked_sessions: table::new(ctx),
+            wal_fee_reserve_id: option::none(),
         };
 
         // Create registry
@@ -826,6 +840,9 @@ module inkblob::notebook {
     public fun note_is_deleted(note: &Note): bool {
         note.is_deleted
     }
+
+    #[test_only]
+    public fun note_revision(note: &Note): u64 { note.revision }
 
     #[test_only]
     public fun note_updated_at(note: &Note): u64 {
@@ -1009,13 +1026,15 @@ module inkblob::notebook {
     /// Create and share the per-notebook WAL fee escrow reserve. Called once from
     /// create_notebook / create_additional_notebook so that every notebook has exactly
     /// one WalFeeReserve to deposit storage-fee payments into and withdraw rebates from.
-    fun create_and_share_wal_fee_reserve(notebook_id: ID, ctx: &mut TxContext) {
+    fun create_and_share_wal_fee_reserve(notebook: &mut Notebook, ctx: &mut TxContext) {
+        let notebook_id = object::uid_to_inner(&notebook.id);
         let reserve = WalFeeReserve {
             id: object::new(ctx),
             notebook_id,
             balance: balance::zero<WAL>(),
         };
         let reserve_id_value = object::uid_to_inner(&reserve.id);
+        option::fill(&mut notebook.wal_fee_reserve_id, reserve_id_value);
 
         transfer::share_object(reserve);
 
@@ -1034,21 +1053,20 @@ module inkblob::notebook {
         let now = tx_context::epoch_timestamp_ms(ctx);
 
         // Create shared Notebook object
-        let notebook = Notebook {
+        let mut notebook = Notebook {
             id: object::new(ctx),
             owner: sender,
             notes: table::new(ctx),
             folders: table::new(ctx),
             permissions: table::new(ctx),
             wrapped_content_keys: table::new(ctx),
+            revoked_sessions: table::new(ctx),
+            wal_fee_reserve_id: option::none(),
         };
         let notebook_id_value = object::uid_to_inner(&notebook.id);
 
-        // Share the notebook for multi-device access
+        create_and_share_wal_fee_reserve(&mut notebook, ctx);
         transfer::share_object(notebook);
-
-        // Create and share this notebook's WAL fee escrow reserve
-        create_and_share_wal_fee_reserve(notebook_id_value, ctx);
 
         // Create registry
         let registry = NotebookRegistry {
@@ -1090,21 +1108,20 @@ module inkblob::notebook {
         assert!(!table::contains(&registry.notebooks, notebook_name), E_NOTEBOOK_EXISTS);
 
         // Create shared Notebook object
-        let notebook = Notebook {
+        let mut notebook = Notebook {
             id: object::new(ctx),
             owner: sender,
             notes: table::new(ctx),
             folders: table::new(ctx),
             permissions: table::new(ctx),
             wrapped_content_keys: table::new(ctx),
+            revoked_sessions: table::new(ctx),
+            wal_fee_reserve_id: option::none(),
         };
         let notebook_id_value = object::uid_to_inner(&notebook.id);
 
-        // Share the notebook for multi-device access
+        create_and_share_wal_fee_reserve(&mut notebook, ctx);
         transfer::share_object(notebook);
-
-        // Create and share this notebook's WAL fee escrow reserve
-        create_and_share_wal_fee_reserve(notebook_id_value, ctx);
 
         // Add to registry
         table::add(&mut registry.notebooks, notebook_name, notebook_id_value);
@@ -1217,6 +1234,16 @@ module inkblob::notebook {
             sui_funded: sui_to_transfer,
             wal_funded: wal_to_transfer,
         });
+    }
+
+    /// Invalidate a hot-wallet capability without possessing its owned object.
+    public entry fun revoke_session_by_id(notebook: &mut Notebook, session_cap_id: ID, ctx: &TxContext) {
+        let sender = tx_context::sender(ctx);
+        assert!(notebook.owner == sender, E_NOT_OWNER);
+        if (!table::contains(&notebook.revoked_sessions, session_cap_id)) {
+            table::add(&mut notebook.revoked_sessions, session_cap_id, true);
+        };
+        event::emit(SessionRevoked { notebook_id: object::uid_to_inner(&notebook.id), session_cap_id, owner: sender });
     }
 
     /// Revoke a session capability
@@ -1370,6 +1397,21 @@ module inkblob::notebook {
         });
     }
 
+    /// Revoke by address; the grantee-owned receipt is not a valid owner transaction input.
+    public entry fun revoke_access_by_address(notebook: &mut Notebook, grantee: address, ctx: &TxContext) {
+        let sender = tx_context::sender(ctx);
+        assert!(notebook.owner == sender, E_NOT_OWNER);
+        if (table::contains(&notebook.permissions, grantee)) {
+            table::remove(&mut notebook.permissions, grantee);
+        };
+        if (table::contains(&notebook.wrapped_content_keys, grantee)) {
+            table::remove(&mut notebook.wrapped_content_keys, grantee);
+        };
+        event::emit(AccessRevokedByAddress {
+            notebook_id: object::uid_to_inner(&notebook.id), grantee, revoked_by: sender,
+        });
+    }
+
     /// Revoke a previously granted SharedAccess. OWNER-ONLY, by design: only the notebook
     /// owner may revoke someone else's access - the grantee calling this on their own
     /// SharedAccess object does NOT succeed (see leave_shared_notebook for the deliberately
@@ -1456,7 +1498,7 @@ module inkblob::notebook {
         encrypted_title: string::String,
         folder_id: option::Option<ID>,
         parent_note_id: option::Option<ID>,
-        expected_updated_at: option::Option<u64>,
+        expected_revision: option::Option<u64>,
         blob_size_mb: option::Option<u64>,
         wal_payment: option::Option<Coin<WAL>>,
         ctx: &mut TxContext
@@ -1472,7 +1514,7 @@ module inkblob::notebook {
         let notebook_id = object::uid_to_inner(&notebook.id);
 
         // SECURITY FIX: Validate parent_note_id if specified. Applies to both the
-        // create-new-note and update-existing-note branches (unlike expected_updated_at,
+        // create-new-note and update-existing-note branches (unlike expected_revision,
         // which only guards updates), mirroring create_folder/update_folder's checks.
         if (option::is_some(&parent_note_id)) {
             let parent = *option::borrow(&parent_note_id);
@@ -1527,10 +1569,10 @@ module inkblob::notebook {
             // Update existing note
             let note = table::borrow_mut(&mut notebook.notes, note_id);
             // Optimistic concurrency check: if the caller supplied an expected
-            // version, it must match the note's current updated_at or we abort.
-            // A None expected_updated_at skips the check entirely (backward compatible).
+            // version, it must match the note's current revision or we abort.
+            // A None expected_revision skips the check entirely (backward compatible).
             assert!(
-                option::is_none(&expected_updated_at) || *option::borrow(&expected_updated_at) == note.updated_at,
+                option::is_none(&expected_revision) || *option::borrow(&expected_revision) == note.revision,
                 E_VERSION_MISMATCH
             );
             note.blob_id = blob_id;
@@ -1539,6 +1581,7 @@ module inkblob::notebook {
             note.folder_id = folder_id;
             note.parent_note_id = parent_note_id;
             note.updated_at = now;
+            note.revision = note.revision + 1;
             note.wal_paid = note.wal_paid + wal_paid_this_call;
             // A genuine new deposit means there's fresh, unclaimed wal_paid again - without
             // this, a note that already had its rebate claimed once could never have a later
@@ -1547,7 +1590,9 @@ module inkblob::notebook {
                 note.rebate_claimed = false;
             };
         } else {
-            // Create new note
+            // Create new note. A write based on an expected revision always leaves the note at
+            // expected + 1, in this branch too: a client whose placeholder create never landed
+            // then stays in step with the chain instead of hitting a permanent version mismatch.
             let note = Note {
                 id: note_id,
                 blob_id,
@@ -1555,6 +1600,7 @@ module inkblob::notebook {
                 encrypted_title,
                 folder_id,
                 parent_note_id,
+                revision: if (option::is_some(&expected_revision)) *option::borrow(&expected_revision) + 1 else 0,
                 created_at: now,
                 updated_at: now,
                 is_deleted: false,
@@ -1588,7 +1634,7 @@ module inkblob::notebook {
         encrypted_title: string::String,
         folder_id: option::Option<ID>,
         parent_note_id: option::Option<ID>,
-        expected_updated_at: option::Option<u64>,
+        expected_revision: option::Option<u64>,
         blob_size_mb: option::Option<u64>,
         wal_payment: option::Option<Coin<WAL>>,
         ctx: &mut TxContext
@@ -1598,12 +1644,14 @@ module inkblob::notebook {
         // Verify session cap belongs to this notebook
         assert!(session_cap.notebook_id == object::uid_to_inner(&notebook.id), E_NOT_OWNER);
         assert!(session_cap.hot_wallet_address == sender, E_NOT_OWNER);
+        assert!(session_cap.expires_at > tx_context::epoch_timestamp_ms(ctx), E_SESSION_EXPIRED);
+        assert!(!table::contains(&notebook.revoked_sessions, object::uid_to_inner(&session_cap.id)), E_SESSION_EXPIRED);
 
         let now = tx_context::epoch_timestamp_ms(ctx);
         let notebook_id = object::uid_to_inner(&notebook.id);
 
         // SECURITY FIX: Validate parent_note_id if specified. Applies to both the
-        // create-new-note and update-existing-note branches (unlike expected_updated_at,
+        // create-new-note and update-existing-note branches (unlike expected_revision,
         // which only guards updates), mirroring create_folder/update_folder's checks.
         if (option::is_some(&parent_note_id)) {
             let parent = *option::borrow(&parent_note_id);
@@ -1656,10 +1704,10 @@ module inkblob::notebook {
             // Update existing note
             let note = table::borrow_mut(&mut notebook.notes, note_id);
             // Optimistic concurrency check: if the caller supplied an expected
-            // version, it must match the note's current updated_at or we abort.
-            // A None expected_updated_at skips the check entirely (backward compatible).
+            // version, it must match the note's current revision or we abort.
+            // A None expected_revision skips the check entirely (backward compatible).
             assert!(
-                option::is_none(&expected_updated_at) || *option::borrow(&expected_updated_at) == note.updated_at,
+                option::is_none(&expected_revision) || *option::borrow(&expected_revision) == note.revision,
                 E_VERSION_MISMATCH
             );
             note.blob_id = blob_id;
@@ -1668,6 +1716,7 @@ module inkblob::notebook {
             note.folder_id = folder_id;
             note.parent_note_id = parent_note_id;
             note.updated_at = now;
+            note.revision = note.revision + 1;
             note.wal_paid = note.wal_paid + wal_paid_this_call;
             // See update_note's identical comment: a fresh deposit means fresh unclaimed
             // wal_paid, so a prior claim must not permanently block future rebates.
@@ -1675,7 +1724,9 @@ module inkblob::notebook {
                 note.rebate_claimed = false;
             };
         } else {
-            // Create new note
+            // Create new note. A write based on an expected revision always leaves the note at
+            // expected + 1, in this branch too: a client whose placeholder create never landed
+            // then stays in step with the chain instead of hitting a permanent version mismatch.
             let note = Note {
                 id: note_id,
                 blob_id,
@@ -1683,6 +1734,7 @@ module inkblob::notebook {
                 encrypted_title,
                 folder_id,
                 parent_note_id,
+                revision: if (option::is_some(&expected_revision)) *option::borrow(&expected_revision) + 1 else 0,
                 created_at: now,
                 updated_at: now,
                 is_deleted: false,
@@ -1722,6 +1774,7 @@ module inkblob::notebook {
         let old_folder_id = note.folder_id;
         note.folder_id = new_folder_id;
         note.updated_at = tx_context::epoch_timestamp_ms(ctx);
+        note.revision = note.revision + 1;
 
         // Emit event
         event::emit(NoteMoved {
@@ -1747,6 +1800,7 @@ module inkblob::notebook {
         let note = table::borrow_mut(&mut notebook.notes, note_id);
         note.blob_object_id = new_blob_object_id;
         note.updated_at = tx_context::epoch_timestamp_ms(ctx);
+        note.revision = note.revision + 1;
     }
 
     /// Arweave Backup Metadata Update (direct access, MVP Feature)
@@ -1768,6 +1822,7 @@ module inkblob::notebook {
         note.ar_backup_id = option::some(ar_tx_id);
         note.ar_backup_version = option::some(backup_timestamp);
         note.updated_at = tx_context::epoch_timestamp_ms(ctx);
+        note.revision = note.revision + 1;
 
         // Emit event
         event::emit(ArweaveBackupRecorded {
@@ -2002,6 +2057,7 @@ module inkblob::notebook {
         let note = table::borrow_mut(&mut notebook.notes, note_id);
         note.is_deleted = true;
         note.updated_at = tx_context::epoch_timestamp_ms(ctx);
+        note.revision = note.revision + 1;
 
         // Emit event
         event::emit(NoteDeleted {
@@ -2025,6 +2081,7 @@ module inkblob::notebook {
         let note = table::borrow_mut(&mut notebook.notes, note_id);
         note.is_deleted = false;
         note.updated_at = tx_context::epoch_timestamp_ms(ctx);
+        note.revision = note.revision + 1;
 
         // Emit event
         event::emit(NoteRestored {

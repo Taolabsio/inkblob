@@ -1,5 +1,6 @@
+import { noteText } from '../utils/noteText';
 import { FileText, Folder as FolderIcon, Search } from 'lucide-react';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { Folder, Note } from '../types';
 import { fuzzyMatch } from '../utils/fuzzyMatch';
@@ -27,13 +28,15 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     const [query, setQuery] = useState('');
     const [selectedIndex, setSelectedIndex] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
+    const panelRef = useRef<HTMLDivElement>(null);
+    const dialogId = useId();
 
     const close = () => { setIsOpen(false); setQuery(''); setSelectedIndex(0); };
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             const isMod = e.metaKey || e.ctrlKey;
-            if (isMod && e.key.toLowerCase() === 'k') {
+            if (isMod && !e.altKey && !e.shiftKey && !e.defaultPrevented && e.key.toLowerCase() === 'k') {
                 e.preventDefault();
                 setIsOpen(prev => {
                     if (!prev) onOpenIntent();
@@ -43,18 +46,31 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             }
             if (e.key === 'Escape' && isOpen) close();
         };
+        const openSearch = () => { onOpenIntent(); setIsOpen(true); };
         document.addEventListener('keydown', handleKeyDown);
-        return () => document.removeEventListener('keydown', handleKeyDown);
+        document.addEventListener('inkblob:search', openSearch);
+        return () => { document.removeEventListener('keydown', handleKeyDown); document.removeEventListener('inkblob:search', openSearch); };
     }, [isOpen, onOpenIntent]);
 
     useEffect(() => {
-        if (isOpen) setTimeout(() => inputRef.current?.focus(), 0);
+        if (!isOpen) return;
+        const previousFocus = document.activeElement as HTMLElement | null;
+        inputRef.current?.focus();
+        const trapFocus = (event: KeyboardEvent) => {
+            if (event.key !== 'Tab' || !panelRef.current) return;
+            const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>('input, button'));
+            if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items.at(-1)?.focus(); }
+            else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0]?.focus(); }
+        };
+        document.addEventListener('keydown', trapFocus);
+        return () => { document.removeEventListener('keydown', trapFocus); previousFocus?.focus(); };
     }, [isOpen]);
 
     // Matches Modal.tsx's body-scroll-lock behavior while an overlay is open
     useEffect(() => {
+        const previousOverflow = document.body.style.overflow;
         if (isOpen) document.body.style.overflow = 'hidden';
-        return () => { document.body.style.overflow = 'unset'; };
+        return () => { document.body.style.overflow = previousOverflow; };
     }, [isOpen]);
 
     const items = useMemo<PaletteItem[]>(() => {
@@ -76,7 +92,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             if (fuzzyMatch(query, item.title)) return true;
             if (item.kind === 'note') {
                 const note = notes.find(n => n.id === item.id);
-                if (note && fuzzyMatch(query, getIndexedContent(note.blobId) || note.content)) return true;
+                if (note && fuzzyMatch(query, getIndexedContent(note.blobId) || noteText(note.content))) return true;
             }
             return false;
         }).slice(0, 20);
@@ -93,8 +109,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     if (!isOpen) return null;
 
     return createPortal(
-        <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh] bg-black/50 backdrop-blur-sm animate-in fade-in duration-150" onClick={close}>
-            <div
+        <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh] px-4 bg-black/30 backdrop-blur-sm animate-in fade-in duration-150" onClick={close}>
+            <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Quick search" id={dialogId}
                 className="w-full max-w-lg rounded-xl border border-web3-border bg-web3-card shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150"
                 onClick={(e) => e.stopPropagation()}
             >
@@ -102,6 +118,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                     <Search size={16} className="text-web3-textMuted shrink-0" />
                     <input
                         ref={inputRef}
+                        aria-label="Search notes and folders"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         placeholder="Search notes and folders..."

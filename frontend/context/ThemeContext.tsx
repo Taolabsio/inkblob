@@ -14,8 +14,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         // Check localStorage first
         const saved = localStorage.getItem('inkblob-theme');
         if (saved === 'dark' || saved === 'light') return saved;
-        // Default to dark for that "Web3" feel
-        return 'dark';
+        // Light-first writing space; explicit appearance choices persist.
+        return 'light';
     });
 
     useEffect(() => {

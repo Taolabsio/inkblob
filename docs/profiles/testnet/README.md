@@ -1,3 +1,5 @@
+> Historical v1 deployment. Do not use these package ids with the v2 frontend. See `../../develop/deployment-v2.md`.
+
 # InkBlob Testnet Deployment
 
 ## Overview

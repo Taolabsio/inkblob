@@ -6,7 +6,9 @@ export function useClickOutside(ref: RefObject<HTMLElement | null>, onOutsideCli
         const handleClickOutside = (e: MouseEvent) => {
             if (ref.current && !ref.current.contains(e.target as Node)) onOutsideClick();
         };
+        const handleEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onOutsideClick(); };
+        document.addEventListener('keydown', handleEscape);
         document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
+        return () => { document.removeEventListener('mousedown', handleClickOutside); document.removeEventListener('keydown', handleEscape); };
     }, [ref, onOutsideClick]);
 }

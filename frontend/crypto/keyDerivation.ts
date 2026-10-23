@@ -1,4 +1,4 @@
-import { fromB64 } from '@mysten/sui/utils';
+import { fromBase64 } from '@mysten/sui/utils';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 
 /**
@@ -22,7 +22,7 @@ export async function deriveEncryptionKey(
     }
 
     // 2. Decode base64 signature to raw bytes
-    const signatureBytes = fromB64(walletSignature);
+    const signatureBytes = fromBase64(walletSignature);
 
     // 3. Import signature as key material
     const keyMaterial = await crypto.subtle.importKey(
@@ -85,7 +85,7 @@ export async function deriveHotWalletFromSignature(
     }
 
     // 2. Decode base64 signature to raw bytes
-    const signatureBytes = fromB64(walletSignature);
+    const signatureBytes = fromBase64(walletSignature);
 
     // 3. Import signature as key material
     const keyMaterial = await crypto.subtle.importKey(

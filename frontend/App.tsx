@@ -1,10 +1,12 @@
-import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit';
-import { Folder as FolderIcon, RotateCcw } from 'lucide-react';
+import { noteText } from './utils/noteText';
+import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from './wallet';
+import { FileText, Plus, Folder as FolderIcon, RotateCcw } from 'lucide-react';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CommandPalette } from './components/CommandPalette';
-import { Editor } from './components/Editor';
+const Editor = React.lazy(() => import('./components/Editor').then(module => ({ default: module.Editor })));
 import { Header } from './components/Header';
-import { LandingPage } from './components/LandingPage';
+import { Welcome } from './components/Welcome';
+import { WorkspaceState } from './components/WorkspaceState';
 import { Modal } from './components/Modal';
 import { NoteList } from './components/NoteList';
 import { Onboarding } from './components/Onboarding';
@@ -29,14 +31,18 @@ import { useNotebookMutation } from './hooks/useNotebookMutation';
 import { useWalFeeReserve } from './hooks/useWalFeeReserve';
 import { useWalCoin } from './hooks/useWalCoin';
 import { useNotes } from './hooks/useNotes';
+import { useActiveNotebook } from './hooks/useActiveNotebook';
 import { useSuiService } from './hooks/useSuiService';
 import { SaveResult } from './hooks/useAutosave';
-import * as walrusService from './services/walrus';
+import { writeDraft, readDraft, clearDraft } from './services/draftStore';
+import { mergeRemoteNotes } from './utils/noteState';
+import { deploymentError, NETWORK, STORAGE_EPOCHS } from './config/network';
+import type { UploadResult } from './services/walrus/upload';
 import { Folder, Note } from './types';
 import { getDescendantFolderIds } from './utils/folderTree';
 import { canNestNoteUnder } from './utils/noteTree';
 import { fuzzyMatch } from './utils/fuzzyMatch';
-import { ToastTemplates, sanitizeWeb3Error, getMoveAbortCode } from './utils/toastUtils';
+import { sanitizeWeb3Error, getMoveAbortCode } from './utils/toastUtils';
 
 // Move contract abort code for a CAS/optimistic-concurrency version mismatch on update_note(s)
 // (see E_VERSION_MISMATCH in contracts/inkblob/sources/notebook.move) - kept in sync manually
@@ -88,7 +94,7 @@ class GlobalErrorBoundary extends React.Component<{ children: React.ReactNode },
 function AppContent() {
   const currentAccount = useCurrentAccount();
   const { encryptionKey, lastSignature, lastUserAddress } = useEncryption();
-  const { data: notebook, isLoading: isNotebookLoading, refetch: refetchNotebook } = useNotebook();
+  const { data: notebook, isLoading: isNotebookLoading, error: notebookError, refetch: refetchNotebook } = useNotebook();
   // Shared-viewing mode (ActiveNotebookContext): 'own' by default - in that mode
   // activeNotebookId/activeKey below are byte-for-byte the same values the handlers always used
   // (notebook?.data?.objectId / encryptionKey), so owner behavior is unchanged. When a shared
@@ -96,7 +102,7 @@ function AppContent() {
   // unwrapped shared content key instead.
   const { active, isShared, isReadOnly, exitShared } = useActiveNotebookContext();
   const activeNotebookId = active.kind === 'shared' ? active.notebookId : (notebook?.data?.objectId ?? null);
-  const activeKey = active.kind === 'shared' ? active.contentKey : encryptionKey;
+  const { encryptionKey: activeKey } = useActiveNotebook();
   // update_note/update_note_with_session both require the notebook's WalFeeReserve object as
   // an argument (see useWalFeeReserve's doc comment) - looked up once per notebook and reused
   // by every note create/save call below. Works for shared notebooks too: the reserve id is
@@ -108,6 +114,8 @@ function AppContent() {
   const { getSpendableWalCoin } = useWalCoin();
   const { ensureIndexed, getIndexedContent, indexVersion } = useContentSearchIndex();
   const toast = useToast();
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
   const suiClient = useSuiClient();
 
   // Whether the most recent note save actually attached a real WAL storage-fee payment (vs.
@@ -117,17 +125,26 @@ function AppContent() {
   const [lastSaveWalPaymentActive, setLastSaveWalPaymentActive] = useState<boolean | null>(null);
 
   // Hooks for data fetching
-  const { data: fetchedFolders } = useFolders();
-  const { data: fetchedNotes } = useNotes();
+  const { data: fetchedFolders, error: folderError, refetch: refetchFolders } = useFolders();
+  const { data: fetchedNotes, error: notesError, refetch: refetchNotes } = useNotes();
 
   // State
   const [folders, setFolders] = useState<Folder[]>(INITIAL_FOLDERS);
   const [notes, setNotes] = useState<Note[]>([]);
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
+  const mountedRef = useRef(false);
+  const scope = `${currentAccount?.address}:${activeNotebookId}`;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   const [selectedFolderId, setSelectedFolderId] = useState<string>('notes');
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [editorResetVersion, setEditorResetVersion] = useState(0);
+  const discardedNotesRef = useRef(new Set<string>());
   const [searchQuery, setSearchQuery] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia('(max-width: 1023px)').matches);
 
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -150,11 +167,13 @@ function AppContent() {
   // callers like useAutosave can tell "skipped, try again" apart from "actually saved" apart from
   // "conflict, stop retrying".
   const isSavingRef = useRef<Set<string>>(new Set());
+  const pendingUploadsRef = useRef(new Map<string, { content: string; result: UploadResult }>());
 
   // Ref to prevent duplicate notebook-initialization transactions - state alone isn't a safe
   // guard here because React.StrictMode invokes this effect twice back-to-back before the first
   // invocation's setIsInitializingNotebook(true) has committed, so both could pass a state-only check.
   const isInitializingRef = useRef(false);
+  const initializationAttemptedRef = useRef(false);
 
   // Set of note ids with unsaved local edits, reported per-id by each note's autosave hook (Editor
   // -> onDirtyChange). Keyed by id (not one shared boolean) so a stale in-flight save completing
@@ -199,21 +218,47 @@ function AppContent() {
     setSelectedFolderId('notes');
     setSearchQuery('');
     dirtyNoteIdsRef.current.clear();
+    pendingUploadsRef.current.clear();
     setLastSaveWalPaymentActive(null);
   }, [activeNotebookId]);
 
   // Effect to update state when hooks return data
   useEffect(() => {
-    if (currentAccount && fetchedFolders && fetchedFolders.length > 0) {
+    if (currentAccount && fetchedFolders) {
       setFolders(fetchedFolders);
     }
   }, [fetchedFolders, currentAccount]);
 
   useEffect(() => {
-    if (currentAccount && fetchedNotes && fetchedNotes.length > 0) {
-      setNotes(fetchedNotes);
+    if (!currentAccount || !fetchedNotes || !activeKey || !activeNotebookId) return;
+    let cancelled = false;
+    const draftScope = `${NETWORK}:${scope}`;
+    Promise.all(fetchedNotes.map(async remote => {
+      if (dirtyNoteIdsRef.current.has(remote.id)) return remote;
+      try { return await readDraft(draftScope, remote, activeKey) ?? remote; }
+      catch { toastRef.current.error('Draft recovery failed', 'An encrypted local draft could not be opened. It has been kept for recovery.'); return remote; }
+    })).then(remote => {
+      if (cancelled) return;
+      for (const note of remote) if (note.hasDraft) dirtyNoteIdsRef.current.add(note.id);
+      setNotes(previous => mergeRemoteNotes(previous, remote, new Set([...dirtyNoteIdsRef.current, ...isSavingRef.current])));
+    });
+    return () => { cancelled = true; };
+  }, [fetchedNotes, currentAccount, activeKey, activeNotebookId, scope]);
+
+  const draftWarningRef = useRef(false);
+  useEffect(() => {
+    if (!activeKey || !activeNotebookId) return;
+    for (const note of notes) {
+      if (note.contentLoaded && dirtyNoteIdsRef.current.has(note.id)) {
+        void writeDraft(`${NETWORK}:${scope}`, note, activeKey).catch(() => {
+          if (!draftWarningRef.current) {
+            draftWarningRef.current = true;
+            toastRef.current.error('Local recovery unavailable', 'Keep this tab open until your note has saved successfully.');
+          }
+        });
+      }
     }
-  }, [fetchedNotes, currentAccount]);
+  }, [notes, activeKey, activeNotebookId, scope]);
 
   // Auto-initialize notebook after unlock
   useEffect(() => {
@@ -225,8 +270,8 @@ function AppContent() {
       // 4. No notebook exists
       // 5. Not already initializing (ref check first - synchronous, safe against StrictMode's
       //    back-to-back double-invoke, unlike the isInitializingNotebook state check below)
-      if (isInitializingRef.current) return;
-      if (!currentAccount || !encryptionKey || isNotebookLoading || notebook || isInitializingNotebook) {
+      if (isInitializingRef.current || initializationAttemptedRef.current) return;
+      if (!currentAccount || !encryptionKey || isNotebookLoading || notebookError || notebook || isInitializingNotebook || initializationError || deploymentError()) {
         return;
       }
 
@@ -237,6 +282,7 @@ function AppContent() {
         isInitializing: isInitializingNotebook,
       });
 
+      initializationAttemptedRef.current = true;
       isInitializingRef.current = true;
       setIsInitializingNotebook(true);
       setInitializationError(null);
@@ -266,7 +312,7 @@ function AppContent() {
         if (refetchResult.data) {
           console.log('[App] Notebook initialization complete:', refetchResult.data);
         } else {
-          console.warn('[App] Notebook refetch returned no data, but creation succeeded');
+          throw new Error('Your notebook was created, but is not readable yet. Retry to check its status.');
         }
 
       } catch (error) {
@@ -284,7 +330,7 @@ function AppContent() {
     };
 
     initializeNotebook();
-  }, [currentAccount, encryptionKey, notebook, isNotebookLoading, isInitializingNotebook]);
+  }, [currentAccount, encryptionKey, notebook, isNotebookLoading, notebookError, isInitializingNotebook, initializationError, refetchNotebook, signAndExecuteTransaction, suiService, toast]);
 
   // Ref to make the once-per-session encryption-key registration idempotent across re-renders/
   // effect re-runs (e.g. React.StrictMode's back-to-back double-invoke) - keyed by address so a
@@ -326,6 +372,7 @@ function AppContent() {
 
   // Derived State
   const filteredNotes = useMemo(() => {
+    void indexVersion;
     let filtered = notes;
 
     // Folder Filter
@@ -342,7 +389,7 @@ function AppContent() {
     if (searchQuery.trim()) {
       filtered = filtered.filter(n =>
         fuzzyMatch(searchQuery, n.title) ||
-        fuzzyMatch(searchQuery, getIndexedContent(n.blobId) || n.content)
+        fuzzyMatch(searchQuery, getIndexedContent(n.blobId) || noteText(n.content))
       );
     }
 
@@ -388,6 +435,8 @@ function AppContent() {
       folderId: selectedFolderId === 'trash' || selectedFolderId === 'all' ? 'notes' : selectedFolderId,
       updatedAt: new Date(),
       blobId: '',
+      revision: '0',
+      contentLoaded: true,
     };
     setNotes([newNote, ...notes]);
     setSelectedNoteId(newNote.id);
@@ -442,11 +491,16 @@ function AppContent() {
       console.error('Failed to create note:', error);
       const errorInfo = sanitizeWeb3Error(error);
       toast.error(errorInfo.title, 'Note could not be created. ' + errorInfo.description);
-      // Revert optimistic update
-      setNotes(prev => prev.filter(n => n.id !== newNote.id));
-      if (selectedNoteId === newNote.id) setSelectedNoteId(null);
+      // Keep typed content recoverable even if the initial creation transaction fails.
+      if (!dirtyNoteIdsRef.current.has(newNote.id)) {
+        setNotes(prev => prev.filter(n => n.id !== newNote.id));
+        setSelectedNoteId(current => current === newNote.id ? null : current);
+      }
     } finally {
       isSavingRef.current.delete(newNote.id);
+      if (dirtyNoteIdsRef.current.has(newNote.id) && mountedRef.current && scopeRef.current === scope) {
+        void handleSaveNote(newNote.id, { silent: true });
+      }
     }
   };
 
@@ -480,6 +534,8 @@ function AppContent() {
       folderId: parent?.folderId ?? (selectedFolderId === 'trash' || selectedFolderId === 'all' ? 'notes' : selectedFolderId),
       updatedAt: new Date(),
       blobId: '',
+      revision: '0',
+      contentLoaded: true,
       parentNoteId,
     };
     setNotes([newNote, ...notes]);
@@ -537,11 +593,16 @@ function AppContent() {
       console.error('Failed to create sub-page:', error);
       const errorInfo = sanitizeWeb3Error(error);
       toast.error(errorInfo.title, 'Sub-page could not be created. ' + errorInfo.description);
-      // Revert optimistic update
-      setNotes(prev => prev.filter(n => n.id !== newNote.id));
-      if (selectedNoteId === newNote.id) setSelectedNoteId(null);
+      // Keep typed content recoverable even if the initial creation transaction fails.
+      if (!dirtyNoteIdsRef.current.has(newNote.id)) {
+        setNotes(prev => prev.filter(n => n.id !== newNote.id));
+        setSelectedNoteId(current => current === newNote.id ? null : current);
+      }
     } finally {
       isSavingRef.current.delete(newNote.id);
+      if (dirtyNoteIdsRef.current.has(newNote.id) && mountedRef.current && scopeRef.current === scope) {
+        void handleSaveNote(newNote.id, { silent: true });
+      }
     }
   };
 
@@ -706,6 +767,12 @@ function AppContent() {
     }
   };
 
+  const acknowledgeNoteMutation = (id: string, revision: string | undefined) => {
+    if (revision === undefined) return;
+    setNotes(previous => previous.map(note => note.id === id && note.revision === revision
+      ? { ...note, revision: (BigInt(revision) + 1n).toString() } : note));
+  };
+
   const handleMoveNote = async (noteId: string, newFolderId: string | null) => {
     // Defense in depth - "Move to folder..." and note drag are hidden/disabled in read-only shared mode.
     if (isReadOnly) return;
@@ -718,6 +785,7 @@ function AppContent() {
 
     try {
       await runWalletOnlyMutation(() => suiService.moveNoteTx(activeNotebookId, noteId, newFolderId));
+      acknowledgeNoteMutation(noteId, previous.revision);
       toast.success('Note Moved', 'The note has been moved.');
     } catch (error) {
       console.error('Failed to move note:', error);
@@ -728,8 +796,9 @@ function AppContent() {
   };
 
   const handleUpdateNote = (id: string, updates: Partial<Note>) => {
-    // Optimistic update only - no network calls
-    setNotes(prev => prev.map(n => n.id === id ? { ...n, ...updates } : n));
+    discardedNotesRef.current.delete(id);
+    dirtyNoteIdsRef.current.add(id);
+    setNotes(prev => prev.map(n => n.id === id ? { ...n, ...updates, hasDraft: true, editVersion: (n.editVersion ?? 0) + 1 } : n));
   };
 
   /**
@@ -743,7 +812,7 @@ function AppContent() {
   const handleSaveNote = async (id: string, options?: { silent?: boolean }): Promise<SaveResult> => {
     // Defense in depth - read-only shared mode renders no save affordance at all (editor is
     // non-editable, Save button hidden), so nothing should ever get here; refuse regardless.
-    if (isReadOnly) return 'skipped';
+    if (isReadOnly || !mountedRef.current || scopeRef.current !== scope) return 'cancelled';
     const silent = options?.silent ?? false;
 
     // Skip if the id is locked by another in-flight save OR by its own still-pending creation
@@ -754,8 +823,13 @@ function AppContent() {
 
     if (!activeNotebookId || !activeKey || !walFeeReserveId) return 'skipped';
 
-    const note = notes.find(n => n.id === id);
-    if (!note) return 'skipped';
+    const note = notesRef.current.find(n => n.id === id);
+    if (!note || !note.contentLoaded) return 'skipped';
+    if (note.isDeleted || discardedNotesRef.current.has(id)) return 'cancelled';
+    if (note.revision === undefined) {
+      toast.error('Notebook upgrade required', 'This notebook uses an older contract. Export your notes before migrating.');
+      return 'conflict';
+    }
 
     // Mark as saving
     isSavingRef.current.add(id);
@@ -767,20 +841,20 @@ function AppContent() {
       // notebook.owner == sender), so a grantee can never obtain one and the session path must
       // never even be attempted. With signer null, the Walrus upload below takes its existing
       // wallet writeFilesFlow branch and executeWithSigner takes the wallet builder branch.
-      const signer = isShared ? null : await ensureSessionAuthorized(activeNotebookId);
+      const signer = isShared ? null : await ensureSessionAuthorized(activeNotebookId, { interactive: !silent });
+      if (silent && !signer) return 'cancelled';
 
       if (!silent) {
         loadingToastIdRef.current = toast.loading('Saving Note', 'Encrypting content and uploading to storage...');
       }
 
-      const result = await walrusService.uploadInkBlobContent(
-        note.content,
-        activeKey,
-        signer?.ephemeralKeypair,
-        1,
-        currentAccount?.address,
-        signAndExecuteTransaction
+      const cachedUpload = pendingUploadsRef.current.get(id);
+      const result = cachedUpload?.content === note.content ? cachedUpload.result : await (await import('./services/walrus/upload')).uploadInkBlobContent(
+        note.content, activeKey, signer?.ephemeralKeypair, STORAGE_EPOCHS,
+        currentAccount?.address, signAndExecuteTransaction
       );
+      if (!mountedRef.current || scopeRef.current !== scope) return 'cancelled';
+      pendingUploadsRef.current.set(id, { content: note.content, result });
       const blobId = result.blobId;
 
       const encryptedTitle = await encryptText(note.title, activeKey);
@@ -789,7 +863,7 @@ function AppContent() {
       // CAS guard: the contract asserts this matches the note's current on-chain updated_at
       // before overwriting (skipped entirely when the note doesn't exist yet on-chain, i.e. its
       // creation tx hasn't landed) - lets us detect a concurrent edit from another device/tab.
-      const expectedUpdatedAt = note.updatedAt.getTime();
+      const expectedUpdatedAt = note.revision;
 
       // Real WAL storage-fee payment: compute the fee for the content actually just uploaded,
       // then look up a spendable Coin<WAL> owned by whichever address will sign this PTB - the
@@ -819,6 +893,7 @@ function AppContent() {
         }
       }
 
+      if (!mountedRef.current || scopeRef.current !== scope) return 'cancelled';
       await executeWithSigner(signer, {
         session: (sessionCapId) => suiService.updateNoteTxWithSession(
           activeNotebookId,
@@ -831,7 +906,8 @@ function AppContent() {
           contractParentNoteId,
           expectedUpdatedAt,
           walCoinId,
-          effectiveBlobSizeMb
+          effectiveBlobSizeMb,
+          result.blobObject
         ),
         wallet: () => suiService.updateNoteTx(
           activeNotebookId,
@@ -843,13 +919,24 @@ function AppContent() {
           contractParentNoteId,
           expectedUpdatedAt,
           walCoinId,
-          effectiveBlobSizeMb
+          effectiveBlobSizeMb,
+          result.blobObject
         ),
       });
 
       // Only reflect the payment state once the transaction has actually landed - an in-flight
       // attempt that later throws must not be reported as having paid (or definitively not paid).
+      if (!mountedRef.current || scopeRef.current !== scope) return 'cancelled';
+      pendingUploadsRef.current.delete(id);
       setLastSaveWalPaymentActive(walCoinId !== null);
+      const revision = (BigInt(note.revision) + 1n).toString();
+      setNotes(previous => previous.map(current => current.id === id
+        ? { ...current, revision, blobId, blobObjectId: result.blobObject, storageEndEpoch: result.endEpoch, contentLoaded: true, hasDraft: current.editVersion !== note.editVersion } : current));
+      // A newer draft may already be waiting; only acknowledge the version submitted above.
+      if (notesRef.current.find(current => current.id === id)?.editVersion === note.editVersion) {
+        dirtyNoteIdsRef.current.delete(id);
+        clearDraft(`${NETWORK}:${scope}`, id);
+      }
 
       if (loadingToastIdRef.current) toast.dismiss(loadingToastIdRef.current);
       loadingToastIdRef.current = null;
@@ -865,6 +952,7 @@ function AppContent() {
       // Always surface save failures, even for silent (autosave) saves - a silently-failing
       // autosave that never tells the user would itself be a data-loss bug.
       const errorInfo = sanitizeWeb3Error(error);
+      if (/reject|cancel/i.test(error instanceof Error ? error.message : String(error))) return 'cancelled';
 
       // A version-mismatch abort (E_VERSION_MISMATCH) means the note was changed elsewhere and
       // retrying with this same expected_updated_at will deterministically fail again forever -
@@ -885,6 +973,43 @@ function AppContent() {
     }
   };
 
+  const handleDiscardDraft = async (id: string) => {
+    const confirmed = await toast.confirm({ title: 'Discard local changes?',
+      description: 'The latest saved copy will be reloaded. Export a local copy first if you want to keep your unsaved edits.',
+      confirmLabel: 'Discard changes', cancelLabel: 'Keep editing' });
+    if (!confirmed || isSavingRef.current.has(id)) return;
+    try {
+      const result = await refetchNotes();
+      if (result.error || !result.data || scopeRef.current !== scope) throw result.error || new Error('Unable to reload note');
+      const remote = result.data.find(entry => entry.id === id);
+      if (!remote) throw new Error('The saved note is unavailable. Your draft has been kept.');
+      discardedNotesRef.current.add(id);
+      clearDraft(`${NETWORK}:${scope}`, id);
+      dirtyNoteIdsRef.current.delete(id);
+      pendingUploadsRef.current.delete(id);
+      setNotes(previous => previous.map(entry => entry.id === id ? remote : entry));
+      setEditorResetVersion(version => version + 1);
+    } catch { toast.error('Reload failed', 'Your local draft has been kept. Try again when connected.'); }
+  };
+
+  const handleRenewStorage = async (id: string) => {
+    const note = notesRef.current.find(entry => entry.id === id);
+    if (isShared || !note?.blobObjectId || !activeNotebookId) return;
+    try {
+      const blob = await suiClient.getObject({ id: note.blobObjectId });
+      const currentEnd = Number(blob.data.content.fields?.storage?.fields?.end_epoch);
+      if (!Number.isFinite(currentEnd)) throw new Error('Unable to verify storage expiry');
+      const { renewBlobTransaction } = await import('./services/walrus/renew');
+      const transaction = renewBlobTransaction(note.blobObjectId);
+      await signAndExecuteTransaction({ transaction });
+      setNotes(previous => previous.map(entry => entry.id === id ? { ...entry, storageEndEpoch: currentEnd + STORAGE_EPOCHS } : entry));
+      toast.success('Storage extended', `Added ${STORAGE_EPOCHS} Walrus epochs.`);
+    } catch (error) {
+      const message = sanitizeWeb3Error(error);
+      toast.error(message.title, message.description);
+    }
+  };
+
   const handleDeleteNote = (id: string) => {
     setDeleteNoteId(id);
   };
@@ -897,6 +1022,7 @@ function AppContent() {
     if (isReadOnly) return;
     if (!deleteNoteId) return;
     const id = deleteNoteId;
+    const revision = notesRef.current.find(note => note.id === id)?.revision;
     setDeleteNoteId(null);
 
     // Optimistic update - mark deleted rather than removing from `notes`, so it still shows up
@@ -911,6 +1037,7 @@ function AppContent() {
     try {
       const tx = suiService.deleteNoteTx(activeNotebookId, id);
       await signAndExecuteTransaction({ transaction: tx });
+      acknowledgeNoteMutation(id, revision);
       toast.success('Moved to Trash', 'The note has been moved to Trash.');
     } catch (error) {
       console.error('Failed to delete note:', error);
@@ -925,6 +1052,7 @@ function AppContent() {
    * Restore a note out of Trash - the counterpart to confirmDeleteNote.
    */
   const handleRestoreNote = async (id: string) => {
+    const revision = notesRef.current.find(note => note.id === id)?.revision;
     // Defense in depth - Restore affordances are hidden in read-only shared mode.
     if (isReadOnly) return;
     setNotes(prev => prev.map(n => n.id === id ? { ...n, isDeleted: false } : n));
@@ -934,6 +1062,7 @@ function AppContent() {
     try {
       const tx = suiService.restoreNoteTx(activeNotebookId, id);
       await signAndExecuteTransaction({ transaction: tx });
+      acknowledgeNoteMutation(id, revision);
       toast.success('Note Restored', 'The note has been restored from Trash.');
     } catch (error) {
       console.error('Failed to restore note:', error);
@@ -1014,7 +1143,13 @@ function AppContent() {
   // 1. Not Connected
   if (!currentAccount) {
     console.log('[App] Render: Landing page (no account)');
-    return <LandingPage />;
+    return <Welcome />;
+  }
+
+  if (deploymentError() || notebookError) {
+    return <WorkspaceState title="Your workspace is unavailable." description={deploymentError() || 'Unable to load your notebook. Your existing notes have not been changed.'}>
+      <button className="primary-button" onClick={() => refetchNotebook()}>Try again</button><ConnectButton className="workspace-wallet" />
+    </WorkspaceState>;
   }
 
   // 2. Connected, but Locked (No Encryption Key)
@@ -1023,77 +1158,47 @@ function AppContent() {
     return <Onboarding mode="unlock" />;
   }
 
+  if (activeNotebookId && !activeKey) {
+    return <WorkspaceState title="Opening your notebook." description="Getting your encrypted pages ready." busy />;
+  }
+
   // 3. Unlocked, waiting for notebook query to finish
   if (isNotebookLoading) {
     console.log('[App] Render: Loading notebook...');
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mb-4"></div>
-        <p className="text-muted-foreground">Loading your notebook...</p>
-      </div>
-    );
+    return <WorkspaceState title="A moment for your thoughts." description="Loading your notebook from Sui." busy />;
   }
 
   // 4. Auto-initializing notebook (first time user)
   if (isInitializingNotebook) {
     console.log('[App] Render: Initializing notebook...');
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mb-4"></div>
-        <p className="text-lg font-medium mb-2">Initializing Your Notebook</p>
-        <p className="text-muted-foreground text-center max-w-md">
-          Creating your secure notebook on Sui blockchain...
-          <br />
-          This will only take a moment.
-        </p>
-      </div>
-    );
+    return <WorkspaceState title="Making a space for you." description="Creating your encrypted notebook on Sui. Follow the approval prompt in your wallet." busy />;
   }
 
   // 5. Initialization failed, show retry option
   if (!notebook && initializationError) {
     console.log('[App] Render: Initialization error screen');
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground p-4">
-        <div className="max-w-md w-full text-center space-y-6">
-          <div className="mx-auto w-16 h-16 bg-destructive/10 rounded-full flex items-center justify-center">
-            <svg className="w-8 h-8 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-          </div>
-          <h1 className="text-2xl font-bold">Initialization Failed</h1>
-          <p className="text-muted-foreground">
-            Failed to create your notebook on the blockchain.
-            <br />
-            <span className="text-sm">Error: {initializationError}</span>
-          </p>
-          <button
-            onClick={() => {
-              setInitializationError(null);
-              refetchNotebook();
-            }}
-            className="w-full py-3 px-4 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 transition-colors"
-          >
-            Try Again
-          </button>
-        </div>
-      </div>
-    );
+    return <WorkspaceState title="Your notebook couldn’t be created." description={initializationError}>
+      <button className="primary-button" onClick={async () => {
+        const latest = await refetchNotebook();
+        if (!latest.error) { initializationAttemptedRef.current = !!latest.data; setInitializationError(null); }
+      }}>Try again</button>
+    </WorkspaceState>;
   }
 
   console.log('[App] Render: Main app', { hasNotebook: !!notebook });
 
   // 4. Main App (Unlocked & Initialized)
   return (
-    <div className="flex h-screen bg-background text-foreground overflow-hidden">
+    <div className="workspace">
       <Sidebar
         folders={folders}
+        noteCount={notes.filter(note => !note.isDeleted).length}
         selectedFolderId={selectedFolderId}
         onSelectFolder={(id) => {
           setSelectedFolderId(id);
           // Auto-close the mobile drawer on selection - on desktop the sidebar is a static
           // persistent panel (md:static in Sidebar.tsx) so this check is a no-op there.
-          if (window.matchMedia('(max-width: 767px)').matches) setSidebarOpen(false);
+          if (window.matchMedia('(max-width: 1023px)').matches) setSidebarOpen(false);
         }}
         onCreateFolder={openCreateFolderModal}
         onRenameFolder={handleRenameFolder}
@@ -1109,6 +1214,10 @@ function AppContent() {
       />
 
       <div className="flex-1 flex flex-col min-w-0">
+        {(folderError || notesError) && <div role="alert" className="px-4 py-2 text-sm bg-red-500/10 text-red-400 flex flex-wrap gap-3">
+          <span>Unable to refresh your notebook. Existing drafts have been kept.</span>
+          <button className="underline" onClick={() => { void refetchNotes(); void refetchFolders(); }}>Retry</button>
+        </div>}
         {/* Persistent, non-dismissable while viewing someone else's notebook - the only way out
             is the Exit button (or wallet change/lock, which reset shared mode at the provider). */}
         {active.kind === 'shared' && (
@@ -1133,7 +1242,7 @@ function AppContent() {
               don't have room for a 3-pane layout) - which one is driven by whether a note is
               selected, so no extra state is needed beyond selectedNoteId itself. At md+ both
               are always shown side by side, unchanged from the original layout. */}
-          <div className={`${selectedNoteId ? 'hidden md:block' : 'block'} w-full md:w-80 shrink-0`}>
+          <div className={`note-list-column ${selectedNoteId ? 'mobile-hidden' : ''}`}>
             {selectedFolderId === 'trash' && deletedFolders.length > 0 && (
               <div className="px-2 pt-3">
                 <h3 className="px-3 py-1 text-xs font-semibold text-web3-textMuted/70 uppercase tracking-widest">
@@ -1167,6 +1276,7 @@ function AppContent() {
             )}
             <NoteList
               notes={filteredNotes}
+              folderName={folders.find(folder => folder.id === selectedFolderId)?.name || 'Notes'}
               folders={folders}
               selectedNoteId={selectedNoteId}
               onSelectNote={setSelectedNoteId}
@@ -1186,14 +1296,20 @@ function AppContent() {
           <main className={`${selectedNoteId ? 'flex' : 'hidden md:block'} flex-1 bg-background overflow-y-auto relative`}>
             {selectedNoteId ? (
               <GlobalErrorBoundary>
+                <React.Suspense fallback={<p role="status" className="p-8">Opening editor…</p>}>
                 <Editor
-                  key={selectedNoteId}
+                  key={`${selectedNoteId}:${editorResetVersion}`}
                   note={notes.find(n => n.id === selectedNoteId)!}
                   notes={notes}
                   folders={folders}
                   childNotes={childNotes}
                   onUpdateNote={handleUpdateNote}
+                  onHydrateContent={(id, content) => setNotes(previous => previous.map(current =>
+                    current.id === id && !current.contentLoaded && !dirtyNoteIdsRef.current.has(id)
+                      ? { ...current, content, contentLoaded: true } : current))}
                   onSave={handleSaveNote}
+                  onRenewStorage={handleRenewStorage}
+                  onDiscardChanges={handleDiscardDraft}
                   onDeleteNote={handleDeleteNote}
                   onRestoreNote={handleRestoreNote}
                   onCreateNote={handleCreateNote}
@@ -1211,11 +1327,10 @@ function AppContent() {
                   // shared mode (Share is hidden there anyway) as defense in depth.
                   notebookId={isShared ? null : (notebook?.data?.objectId ?? null)}
                 />
+                </React.Suspense>
               </GlobalErrorBoundary>
             ) : (
-              <div className="flex items-center justify-center h-full text-muted-foreground">
-                Select a note or create a new one
-              </div>
+              <div className="workspace-empty"><FileText size={34} strokeWidth={1.2} /><h2>A little room for your next idea.</h2><p>Open a note from the list, or start fresh. The page is yours.</p>{!isReadOnly && selectedFolderId !== 'trash' && <button className="primary-button" onClick={handleCreateNote}><Plus size={15} />Create a note</button>}<kbd>⌘ / Ctrl + K to find anything</kbd></div>
             )}
           </main>
         </div>
@@ -1312,7 +1427,7 @@ function AppContent() {
   );
 }
 
-export default function App() {
+function AccountWorkspace() {
   return (
     <ThemeProvider>
       <EncryptionProvider>
@@ -1333,4 +1448,8 @@ export default function App() {
       </EncryptionProvider>
     </ThemeProvider>
   );
+}
+export default function App() {
+  const account = useCurrentAccount();
+  return <AccountWorkspace key={`${NETWORK}:${account?.address ?? 'disconnected'}`} />;
 }

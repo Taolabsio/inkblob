@@ -1,9 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useRef, useState } from 'react';
-import { downloadInkBlobContent } from '../services/walrus/download';
+import { noteText } from '../utils/noteText';
 import { Note } from '../types';
 import { useActiveNotebook } from './useActiveNotebook';
-import { isValidBlobId } from './useNoteContent';
+import { isValidBlobId } from '../utils/noteState';
 
 // Body-content search requires decrypting each note's Walrus blob, a real network + crypto cost
 // per note - so this only indexes a bounded, recent slice on explicit search intent (search box
@@ -42,7 +42,7 @@ export function useContentSearchIndex() {
                 const note = candidates[cursor++];
                 await queryClient.prefetchQuery({
                     queryKey: ['note-content', note.blobId],
-                    queryFn: () => downloadInkBlobContent(note.blobId, encryptionKey).catch(() => ''),
+                    queryFn: async () => (await import('../services/walrus/download')).downloadInkBlobContent(note.blobId, encryptionKey),
                     staleTime: 5 * 60 * 1000, // matches useNoteContent's staleTime so caches agree
                 });
             }
@@ -56,7 +56,7 @@ export function useContentSearchIndex() {
 
     const getIndexedContent = useCallback((blobId: string | undefined | null): string => {
         if (!blobId) return '';
-        return queryClient.getQueryData<string>(['note-content', blobId]) ?? '';
+        return noteText(queryClient.getQueryData<string>(['note-content', blobId]) ?? '');
     }, [queryClient]);
 
     return { ensureIndexed, getIndexedContent, indexVersion: version };

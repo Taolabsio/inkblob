@@ -1,5 +1,5 @@
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { fromB64 } from '@mysten/sui/utils';
+import { fromBase64 } from '@mysten/sui/utils';
 
 /**
  * Generate a unique device fingerprint using SHA-256
@@ -17,7 +17,7 @@ export async function deriveDeviceFingerprint(): Promise<string> {
             deviceId = crypto.randomUUID();
             localStorage.setItem('inkblob_device_id', deviceId);
         }
-    } catch (error) {
+    } catch {
         // Fallback for browsers with localStorage disabled
         console.warn('localStorage unavailable, using session-only device ID');
         deviceId = crypto.randomUUID();
@@ -60,7 +60,7 @@ export async function deriveHotWallet(
     deviceFingerprint: string
 ): Promise<Ed25519Keypair> {
     // 1. Decode signature
-    const signatureBytes = fromB64(walletSignature);
+    const signatureBytes = fromBase64(walletSignature);
 
     // 2. Import signature as key material
     const keyMaterial = await crypto.subtle.importKey(

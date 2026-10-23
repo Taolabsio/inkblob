@@ -5,10 +5,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bold, Italic, Underline, Code, Link, Strikethrough, Palette } from 'lucide-react';
 import { mergeRegister } from '@lexical/utils';
-import { $isCodeHighlightNode } from '@lexical/code';
 import { $isLinkNode, TOGGLE_LINK_COMMAND } from '@lexical/link';
 import { LinkEditPopover } from '../ui/LinkEditPopover';
 import { ColorPickerPopover } from '../ui/ColorPickerPopover';
+import { usePopoverPosition } from '../ui/usePopoverPosition';
 
 const FloatingToolbar = ({
     editor,
@@ -87,7 +87,7 @@ const FloatingToolbar = ({
                 // We want it centered above the selection
                 setPosition({
                     top: rect.top - 50, // 50px above
-                    left: rect.left + rect.width / 2,
+                    left: rect.left + rect.width / 2 - 145,
                 });
             } else {
                 setPosition(null);
@@ -115,6 +115,13 @@ const FloatingToolbar = ({
         );
     }, [editor, updateToolbar]);
 
+    useEffect(() => {
+        const reposition = () => editor.getEditorState().read(updateToolbar);
+        window.addEventListener('scroll', reposition, true);
+        window.addEventListener('resize', reposition);
+        return () => { window.removeEventListener('scroll', reposition, true); window.removeEventListener('resize', reposition); };
+    }, [editor, updateToolbar]);
+    const clamped = usePopoverPosition(popupCharStylesEditorRef, position ?? { top: 0, left: 0 });
     const openLinkPopover = () => {
         const rect = linkButtonRef.current?.getBoundingClientRect();
         if (!rect) return;
@@ -141,9 +148,11 @@ const FloatingToolbar = ({
         <>
             {position && createPortal(
                 <div
-                    className="fixed z-50 flex items-center gap-1 p-1 rounded-lg bg-web3-card border border-web3-border shadow-xl animate-in fade-in zoom-in-95 duration-100 transform -translate-x-1/2"
-                    style={{ top: position.top, left: position.left }}
+                    className="fixed z-50 flex items-center gap-1 p-1 rounded-lg bg-web3-card border border-web3-border shadow-xl animate-in fade-in zoom-in-95 duration-100"
+                    style={clamped}
                     ref={popupCharStylesEditorRef}
+                    role="toolbar" aria-label="Selection formatting"
+                    onMouseDown={event => event.preventDefault()}
                 >
                     <button
                         onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold')}

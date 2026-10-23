@@ -1,265 +1,77 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { uploadBlob } from '../upload';
 import { downloadBlob } from '../download';
 import { BlobNotFoundError } from '../errors';
+const mocks = vi.hoisted(() => ({ writeBlob: vi.fn(), readBlob: vi.fn(), flow: vi.fn(), fetch: vi.fn() }));
+vi.mock('../config', () => ({ createWalrusClient: () => ({ walrus: { writeBlob: mocks.writeBlob, readBlob: mocks.readBlob, writeBlobFlow: mocks.flow } }),
+    WALRUS_CONFIG: { aggregator: 'https://example.test', aggregatorTimeout: 1000, defaultEpochs: 30, maxBlobSize: 1024 } }));
 
-// Hoist mocks so they are available in the factory
-const { mockStore, mockGetFiles } = vi.hoisted(() => ({
-    mockStore: vi.fn(),
-    mockGetFiles: vi.fn(),
-}));
+beforeEach(() => { vi.resetAllMocks(); vi.stubGlobal('fetch', mocks.fetch); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+const payload = new Uint8Array([1, 2, 3]);
+const signer = { toSuiAddress: () => '0x1' } as any;
 
-vi.mock('@mysten/walrus', () => {
-    return {
-        walrus: vi.fn(() => ({
-            writeBlob: mockStore,
-            getFiles: mockGetFiles,
-        })),
-    };
-});
-
-// Mock encryption/decryption
-vi.mock('../../crypto/encryption', () => ({
-    encryptContent: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
-}));
-
-vi.mock('../../crypto/decryption', () => ({
-    decryptContent: vi.fn().mockResolvedValue('decrypted content'),
-}));
-
-// Mock fetch for aggregator tests
-const mockFetch = vi.fn();
-global.fetch = mockFetch;
-
-// Mock createWalrusClient to avoid SDK issues in tests
-vi.mock('../config', () => ({
-    createWalrusClient: vi.fn(() => ({
-        walrus: {
-            getFiles: mockGetFiles,
-            writeBlob: mockStore,
-        },
-    })),
-    WALRUS_CONFIG: {
-        network: 'testnet',
-        uploadRelay: 'https://test-uploader.testnet.walrus.space',
-        aggregator: 'https://test-aggregator.testnet.walrus.space',
-        defaultEpochs: 30,
-        maxBlobSize: 100 * 1024 * 1024,
-        aggregatorTimeout: 10000,
-    },
-}));
-
-describe('Walrus Integration', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
+describe('Walrus storage', () => {
+    it('retains the real blob object and expiry for session uploads', async () => {
+        mocks.writeBlob.mockResolvedValue({ blobId: 'blob', blobObject: { id: '0xabc', storage: { end_epoch: 120 } } });
+        const result = await uploadBlob(payload, 30, signer, '0xowner');
+        expect(mocks.writeBlob).toHaveBeenCalledWith({ blob: payload, epochs: 30, signer, owner: '0xowner', deletable: false });
+        expect(result).toMatchObject({ blobId: 'blob', blobObject: '0xabc', endEpoch: 120, encryptedSizeBytes: 3 });
     });
-
-    describe('Upload Service', () => {
-        it('should upload blob successfully', async () => {
-            const mockData = new Uint8Array([1, 2, 3]);
-            const mockResult = { blobId: 'test-id', blobObject: { id: 'obj-id' } };
-            mockStore.mockResolvedValue(mockResult);
-
-            const result = await uploadBlob(mockData);
-
-            expect(mockStore).toHaveBeenCalledWith(mockData, { epochs: 30 });
-            expect(result.blobId).toBe('test-id');
-            expect(result.blobObject).toBe('obj-id');
-        });
-
-        it('should throw error if blob exceeds max size', async () => {
-            const largeData = new Uint8Array(100 * 1024 * 1024 + 1); // 100MB + 1
-            await expect(uploadBlob(largeData)).rejects.toThrow('exceeds max size');
-        });
-
-        it('should retry on failure', async () => {
-            const mockData = new Uint8Array([1, 2, 3]);
-            mockStore.mockRejectedValueOnce(new Error('Network error'))
-                .mockResolvedValue({ blobId: 'test-id', blobObject: { id: 'obj-id' } });
-
-            const result = await uploadBlob(mockData);
-
-            expect(mockStore).toHaveBeenCalledTimes(2);
-            expect(result.blobId).toBe('test-id');
-        });
+    it('does not retry paid session registration after failure', async () => {
+        mocks.writeBlob.mockRejectedValue(new Error('transaction aborted'));
+        await expect(uploadBlob(payload, 30, signer)).rejects.toThrow('aborted');
+        expect(mocks.writeBlob).toHaveBeenCalledTimes(1);
     });
-
-    describe('Download Service', () => {
-        describe('Aggregator Downloads', () => {
-            it('should download from aggregator successfully', async () => {
-                const mockData = new Uint8Array([4, 5, 6]);
-                const mockBlob = new Blob([mockData]);
-                mockFetch.mockResolvedValueOnce({
-                    ok: true,
-                    blob: async () => mockBlob,
-                    arrayBuffer: async () => mockData.buffer,
-                });
-
-                const result = await downloadBlob('test-aggregator-id');
-
-                expect(mockFetch).toHaveBeenCalledWith(
-                    expect.stringContaining('/v1/blobs/test-aggregator-id'),
-                    expect.objectContaining({
-                        headers: { 'Accept': 'application/octet-stream' },
-                        signal: expect.any(AbortSignal),
-                    })
-                );
-                expect(result).toBeInstanceOf(Uint8Array);
-                expect(result).toEqual(mockData);
-            });
-
-            it('should fallback to SDK when aggregator returns 404', async () => {
-                const mockFile = {
-                    bytes: async () => new Uint8Array([7, 8, 9]),
-                };
-                mockGetFiles.mockResolvedValue([mockFile]);
-
-                // Aggregator returns 404
-                mockFetch.mockResolvedValueOnce({
-                    ok: false,
-                    status: 404,
-                    statusText: 'Not Found',
-                });
-
-                const result = await downloadBlob('test-fallback-id');
-
-                expect(mockFetch).toHaveBeenCalledTimes(1);
-                expect(mockGetFiles).toHaveBeenCalledWith({ ids: ['test-fallback-id'] });
-                expect(result).toEqual(new Uint8Array([7, 8, 9]));
-            });
-
-            it('should fallback to SDK when aggregator fails with network error', async () => {
-                const mockFile = {
-                    bytes: async () => new Uint8Array([10, 11, 12]),
-                };
-                mockGetFiles.mockResolvedValue([mockFile]);
-
-                // Aggregator fails with network error
-                mockFetch.mockRejectedValueOnce(new Error('Network error'));
-
-                const result = await downloadBlob('test-network-id');
-
-                expect(mockFetch).toHaveBeenCalledTimes(1);
-                expect(mockGetFiles).toHaveBeenCalledWith({ ids: ['test-network-id'] });
-                expect(result).toEqual(new Uint8Array([10, 11, 12]));
-            });
-
-            it('should fallback to SDK when aggregator times out', async () => {
-                const mockFile = {
-                    bytes: async () => new Uint8Array([13, 14, 15]),
-                };
-                mockGetFiles.mockResolvedValue([mockFile]);
-
-                // Aggregator times out
-                mockFetch.mockImplementationOnce(() => {
-                    return new Promise((_, reject) => {
-                        const error = new Error('Request timeout');
-                        error.name = 'AbortError';
-                        setTimeout(() => reject(error), 100); // Faster than test timeout
-                    });
-                });
-
-                const result = await downloadBlob('test-timeout-id');
-
-                expect(mockFetch).toHaveBeenCalledTimes(1);
-                expect(mockGetFiles).toHaveBeenCalledWith({ ids: ['test-timeout-id'] });
-                expect(result).toEqual(new Uint8Array([13, 14, 15]));
-            });
-
-            it('should handle aggregator URL with /status suffix', async () => {
-                const mockData = new Uint8Array([16, 17, 18]);
-                const mockBlob = new Blob([mockData]);
-
-                // Test URL handling by checking that /status suffix is removed
-                mockFetch.mockResolvedValueOnce({
-                    ok: true,
-                    blob: async () => mockBlob,
-                    arrayBuffer: async () => mockData.buffer,
-                });
-
-                await downloadBlob('test-url-id');
-
-                expect(mockFetch).toHaveBeenCalledWith(
-                    expect.stringContaining('/v1/blobs/test-url-id'),
-                    expect.objectContaining({
-                        headers: { 'Accept': 'application/octet-stream' },
-                        signal: expect.any(AbortSignal),
-                    })
-                );
-            });
-        });
-
-        describe('SDK Fallback Downloads', () => {
-            it('should download from SDK successfully', async () => {
-                const mockFile = {
-                    bytes: async () => new Uint8Array([1, 2, 3]),
-                };
-                mockGetFiles.mockResolvedValue([mockFile]);
-
-                // Make aggregator fail to force SDK usage
-                mockFetch.mockRejectedValueOnce(new Error('Aggregator unavailable'));
-
-                const result = await downloadBlob('test-sdk-id');
-
-                expect(mockGetFiles).toHaveBeenCalledWith({ ids: ['test-sdk-id'] });
-                expect(result).toEqual(new Uint8Array([1, 2, 3]));
-            });
-
-            it('should throw BlobNotFoundError when SDK returns not found', async () => {
-                const error: any = new Error('Not found');
-                error.status = 404;
-                mockGetFiles.mockRejectedValue(error);
-
-                // Make aggregator fail to force SDK usage
-                mockFetch.mockRejectedValueOnce(new Error('Aggregator unavailable'));
-
-                await expect(downloadBlob('test-sdk-not-found')).rejects.toThrow(BlobNotFoundError);
-            });
-
-            it('should retry SDK on temporary failure', async () => {
-                const mockFile = {
-                    bytes: async () => new Uint8Array([4, 5, 6]),
-                };
-
-                // Aggregator fails first time, then SDK fails once, then succeeds
-                mockFetch.mockRejectedValueOnce(new Error('Aggregator unavailable'));
-                mockGetFiles.mockRejectedValueOnce(new Error('Network error'))
-                    .mockResolvedValue([mockFile]);
-
-                const result = await downloadBlob('test-sdk-retry-id');
-
-                expect(mockGetFiles).toHaveBeenCalledTimes(2);
-                expect(result).toEqual(new Uint8Array([4, 5, 6]));
-            });
-        });
-
-        describe('Error Handling', () => {
-            it('should throw BlobNotFoundError when both aggregator and SDK return 404', async () => {
-                // Aggregator returns 404
-                mockFetch.mockResolvedValueOnce({
-                    ok: false,
-                    status: 404,
-                    statusText: 'Not Found',
-                });
-
-                // SDK also returns 404
-                const error: any = new Error('Not found');
-                error.status = 404;
-                mockGetFiles.mockRejectedValue(error);
-
-                await expect(downloadBlob('test-both-404')).rejects.toThrow(BlobNotFoundError);
-            });
-
-            it('should throw DownloadFailedError for other SDK errors', async () => {
-                // Aggregator fails with network error
-                mockFetch.mockRejectedValueOnce(new Error('Network error'));
-
-                // SDK fails with other error
-                mockGetFiles.mockRejectedValueOnce(new Error('SDK error'));
-
-                // Should retry and eventually fail with DownloadFailedError
-                await expect(downloadBlob('test-sdk-error')).rejects.toThrow('Download failed for blob test-sdk-error: SDK error');
-            });
-        });
+    it('requires a signer and rejects oversized blobs before making requests', async () => {
+        await expect(uploadBlob(payload)).rejects.toThrow('Connect a wallet');
+        await expect(uploadBlob(new Uint8Array(1025), 30, signer)).rejects.toThrow('exceeds max size');
+        expect(mocks.writeBlob).not.toHaveBeenCalled();
+    });
+    it('retries only the data step of a wallet upload', async () => {
+        vi.useFakeTimers();
+        const register = vi.fn(() => ({ kind: 'register' }));
+        const upload = vi.fn().mockRejectedValueOnce(new Error('Network error')).mockResolvedValue({});
+        mocks.flow.mockReturnValue({ encode: vi.fn(), register, upload, certify: () => ({ kind: 'certify' }),
+            getBlob: async () => ({ blobId: 'raw-blob', blobObjectId: '0xabc', blobObject: { storage: { end_epoch: 120 } } }) });
+        const execute = vi.fn().mockResolvedValue({ digest: 'digest' });
+        const pending = uploadBlob(payload, 30, undefined, '0xowner', execute);
+        await vi.runAllTimersAsync();
+        expect((await pending).blobId).toBe('raw-blob');
+        expect(register).toHaveBeenCalledTimes(1);
+        expect(upload).toHaveBeenCalledTimes(2);
+        expect(execute).toHaveBeenCalledTimes(2);
+    });
+    it('never uploads or certifies after wallet rejection', async () => {
+        const upload = vi.fn();
+        mocks.flow.mockReturnValue({ encode: vi.fn(), register: () => ({}), upload });
+        await expect(uploadBlob(payload, 30, undefined, '0xowner', async () => { throw new Error('User rejected'); })).rejects.toThrow('User rejected');
+        expect(upload).not.toHaveBeenCalled();
+    });
+    it('downloads raw encrypted data from the aggregator', async () => {
+        mocks.fetch.mockResolvedValue({ ok: true, blob: async () => new Blob([payload]) });
+        expect(await downloadBlob('blob')).toEqual(payload);
+        expect(mocks.readBlob).not.toHaveBeenCalled();
+    });
+    it('falls back to raw SDK reads on network failure', async () => {
+        mocks.fetch.mockRejectedValue(new Error('Network error'));
+        mocks.readBlob.mockResolvedValue(payload);
+        expect(await downloadBlob('blob')).toEqual(payload);
+        expect(mocks.readBlob).toHaveBeenCalledWith({ blobId: 'blob' });
+    });
+    it('reports missing content without retrying an unrecoverable 404', async () => {
+        mocks.fetch.mockResolvedValue({ ok: false, status: 404 });
+        mocks.readBlob.mockRejectedValue({ status: 404, message: 'not found' });
+        await expect(downloadBlob('missing')).rejects.toBeInstanceOf(BlobNotFoundError);
+        expect(mocks.readBlob).toHaveBeenCalledTimes(1);
+    });
+    it('bounds retries when both download paths fail', async () => {
+        vi.useFakeTimers();
+        mocks.fetch.mockRejectedValue(new Error('Network error'));
+        mocks.readBlob.mockRejectedValue(new Error('unavailable'));
+        const pending = expect(downloadBlob('blob')).rejects.toThrow('unavailable');
+        await vi.runAllTimersAsync();
+        await pending;
+        expect(mocks.readBlob).toHaveBeenCalledTimes(3);
     });
 });

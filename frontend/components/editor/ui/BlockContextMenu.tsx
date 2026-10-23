@@ -1,9 +1,9 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
-import { $createHeadingNode, $createQuoteNode } from '@lexical/rich-text';
-import { INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND } from '@lexical/list';
-import { $createParagraphNode, NodeKey, $getNodeByKey } from 'lexical';
+import { NodeKey, $getNodeByKey } from 'lexical';
 import { $isCollapsibleContainerNode } from '../nodes/CollapsibleNode';
 import {
+    CheckSquare,
+    Code,
     Copy,
     Trash2,
     Type,
@@ -18,10 +18,11 @@ import {
 } from 'lucide-react';
 import React, { useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { $createCalloutNode } from '../nodes/CalloutNode';
 import { duplicateBlock } from '../utils/duplicateNode';
-import { applyColorToBlock, turnBlockInto, turnBlockIntoViaCommand, wrapBlockAsToggle } from '../utils/blockTransforms';
-import { HIGHLIGHT_COLORS, TEXT_COLORS } from './ColorPickerPopover';
+import { applyColorToBlock } from '../utils/blockTransforms';
+import { applyBlockTypeToNode, BLOCK_OPTIONS } from '../utils/blockCommands';
+import { usePopoverPosition } from './usePopoverPosition';
+import { HIGHLIGHT_COLORS, TEXT_COLORS } from './colors';
 import { useClickOutside } from '../../../hooks/useClickOutside';
 
 interface BlockContextMenuProps {
@@ -38,6 +39,7 @@ export const BlockContextMenu: React.FC<BlockContextMenuProps> = ({ nodeKey, pos
     const [editor] = useLexicalComposerContext();
     const containerRef = useRef<HTMLDivElement>(null);
     useClickOutside(containerRef, onClose);
+    const clamped = usePopoverPosition(containerRef, position);
 
     const run = (action: () => void) => {
         action();
@@ -49,23 +51,18 @@ export const BlockContextMenu: React.FC<BlockContextMenuProps> = ({ nodeKey, pos
     // double-wrap), so hide the whole section rather than offering options that silently no-op.
     const isToggleTarget = editor.getEditorState().read(() => $isCollapsibleContainerNode($getNodeByKey(nodeKey)));
 
-    const turnIntoOptions: Array<{ label: string; icon: React.ReactNode; action: () => void }> = isToggleTarget ? [] : [
-        { label: 'Text', icon: <Type size={14} />, action: () => turnBlockInto(editor, nodeKey, () => $createParagraphNode()) },
-        { label: 'Heading 1', icon: <Heading1 size={14} />, action: () => turnBlockInto(editor, nodeKey, () => $createHeadingNode('h1')) },
-        { label: 'Heading 2', icon: <Heading2 size={14} />, action: () => turnBlockInto(editor, nodeKey, () => $createHeadingNode('h2')) },
-        { label: 'Heading 3', icon: <Heading3 size={14} />, action: () => turnBlockInto(editor, nodeKey, () => $createHeadingNode('h3')) },
-        { label: 'Bullet List', icon: <List size={14} />, action: () => turnBlockIntoViaCommand(editor, nodeKey, INSERT_UNORDERED_LIST_COMMAND, undefined) },
-        { label: 'Numbered List', icon: <ListOrdered size={14} />, action: () => turnBlockIntoViaCommand(editor, nodeKey, INSERT_ORDERED_LIST_COMMAND, undefined) },
-        { label: 'Quote', icon: <Quote size={14} />, action: () => turnBlockInto(editor, nodeKey, () => $createQuoteNode()) },
-        { label: 'Callout', icon: <Lightbulb size={14} />, action: () => turnBlockInto(editor, nodeKey, () => $createCalloutNode()) },
-        { label: 'Toggle List', icon: <ChevronRight size={14} />, action: () => wrapBlockAsToggle(editor, nodeKey) },
-    ];
+    const icons = { paragraph: Type, h1: Heading1, h2: Heading2, h3: Heading3, check: CheckSquare, bullet: List, number: ListOrdered, quote: Quote, code: Code, callout: Lightbulb, toggle: ChevronRight };
+    const turnIntoOptions = isToggleTarget ? [] : BLOCK_OPTIONS.map(option => {
+        const Icon = icons[option.type];
+        return { label: option.label, icon: <Icon size={14} />, action: () => applyBlockTypeToNode(editor, nodeKey, option.type) };
+    });
 
     return createPortal(
         <div
             ref={containerRef}
-            className="fixed z-50 w-60 rounded-lg border border-web3-border bg-web3-card shadow-xl p-1 animate-in fade-in zoom-in-95 duration-100"
-            style={{ top: position.top, left: position.left }}
+            role="dialog" aria-label="Block actions"
+            className="fixed z-50 w-60 max-h-[calc(100dvh-16px)] overflow-y-auto rounded-lg border border-web3-border bg-web3-card shadow-xl p-1 animate-in fade-in zoom-in-95 duration-100"
+            style={clamped}
             onClick={(e) => e.stopPropagation()}
         >
             <button

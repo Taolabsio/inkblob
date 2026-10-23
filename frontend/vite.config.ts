@@ -1,10 +1,9 @@
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig } from 'vite';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, '.', '');
   return {
     server: {
       port: Number(process.env.PORT) || 3000,
@@ -21,15 +20,12 @@ export default defineConfig(({ mode }) => {
         },
       }),
     ],
-    define: {
-      'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
       }
     },
+    esbuild: mode === 'production' ? { drop: ['console', 'debugger'] } : {},
     // Ensure WASM files are served with correct MIME type
     assetsInclude: ['**/*.wasm'],
   };

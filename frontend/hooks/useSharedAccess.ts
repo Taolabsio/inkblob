@@ -1,4 +1,4 @@
-import { useSuiClient } from '@mysten/dapp-kit';
+import { useSuiClient } from '../wallet';
 import { useQuery } from '@tanstack/react-query';
 import { SuiService } from '../services/suiService';
 import { useNotebook } from './useNotebook';
@@ -52,10 +52,7 @@ export function useSharedAccess() {
             if (!notebookId) return [];
 
             try {
-                const [permissions, eventMap] = await Promise.all([
-                    suiService.fetchNotebookPermissions(notebookId),
-                    suiService.fetchAccessGrantedEvents(notebookId),
-                ]);
+                const permissions = await suiService.fetchNotebookPermissions(notebookId);
 
                 const now = Date.now();
 
@@ -68,13 +65,13 @@ export function useSharedAccess() {
                         address: grant.address,
                         permission: grant.permission === PERMISSION_WRITE ? PERMISSION_WRITE : PERMISSION_READ,
                         expiresAt: expiresAtMs,
-                        sharedAccessObjectId: eventMap.get(grant.address.toLowerCase()) ?? null,
+                        sharedAccessObjectId: null,
                         isExpired,
                     };
                 });
             } catch (error) {
                 console.error('[useSharedAccess] Error fetching shared access grants:', error);
-                return [];
+                throw error;
             }
         },
         enabled: !!notebookId,

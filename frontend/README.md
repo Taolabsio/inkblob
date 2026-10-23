@@ -1,20 +1,11 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# InkBlob frontend
 
-# Run and deploy your AI Studio app
+React 19, Lexical, TypeScript, Vite, Sui gRPC, current dApp Kit, and Walrus.
 
-This contains everything you need to run your app locally.
+Use Node.js 24. Run `npm ci`, copy `.env.local.example` to `.env.local`, and populate a fresh v2 deployment. Run `npm run deployment:check` before connecting a wallet, then `npm run dev`.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1PsLI0XuWNESET1gJlfOLTwolfa5oNnKQ
+`npm run check` runs the typechecker, linter, regression tests, and production build. `npm test -- --run` runs the tests once.
 
-## Run Locally
+No Gemini API key is required. Private service credentials must never be embedded in frontend environment variables.
 
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+See the root README and `../docs/develop/deployment-v2.md` for privacy, retention, sharing, and migration limits.

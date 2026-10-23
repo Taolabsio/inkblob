@@ -158,8 +158,8 @@ export const SharedNotebooksModal: React.FC<SharedNotebooksModalProps> = ({ isOp
     return (
         <Modal isOpen={isOpen} onClose={onClose} title="Shared With Me" className="w-full max-w-lg">
             <div className="flex flex-col gap-4">
-                <div className="flex gap-3 p-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 text-yellow-200">
-                    <ShieldAlert size={20} className="shrink-0 mt-0.5 text-yellow-400" />
+                <div className="flex gap-3 p-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 text-amber-900 dark:text-amber-200">
+                    <ShieldAlert size={20} className="shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" />
                     <p className="text-sm leading-snug">
                         These are notebooks whose owner granted this wallet on-chain access. A
                         notebook does not store its own name where a grantee can read it, so
@@ -218,8 +218,8 @@ export const SharedNotebooksModal: React.FC<SharedNotebooksModalProps> = ({ isOp
                                     </div>
 
                                     {result?.status === 'no-key' && (
-                                        <div className="flex gap-2 px-2.5 py-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 text-yellow-200">
-                                            <ShieldAlert size={14} className="shrink-0 mt-0.5 text-yellow-400" />
+                                        <div className="flex gap-2 px-2.5 py-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 text-amber-900 dark:text-amber-200">
+                                            <ShieldAlert size={14} className="shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" />
                                             <p className="text-xs leading-snug">
                                                 No decryption key has been shared with you for this notebook
                                                 yet (the owner hasn't shared, or shared before you registered
@@ -230,7 +230,7 @@ export const SharedNotebooksModal: React.FC<SharedNotebooksModalProps> = ({ isOp
                                     )}
 
                                     {result?.status === 'error' && (
-                                        <div className="flex gap-2 px-2.5 py-2 rounded-md border border-red-500/30 bg-red-500/10 text-red-200">
+                                        <div className="flex gap-2 px-2.5 py-2 rounded-md border border-red-500/30 bg-red-500/10 text-red-800 dark:text-red-200">
                                             <XCircle size={14} className="shrink-0 mt-0.5 text-red-400" />
                                             <p className="text-xs leading-snug">
                                                 Could not open this notebook: {result.message}. This is a

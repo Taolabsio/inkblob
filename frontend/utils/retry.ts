@@ -98,12 +98,11 @@ export async function retryUntil<T>(
     options: RetryOptions = {}
 ): Promise<T> {
     const opts = { ...DEFAULT_OPTIONS, ...options };
-    let lastResult: T | undefined;
 
     for (let attempt = 1; attempt <= opts.maxAttempts; attempt++) {
         try {
             const result = await fn();
-            lastResult = result;
+
 
             // Check if condition is met
             if (condition(result)) {

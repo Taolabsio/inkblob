@@ -5,6 +5,7 @@ import {
     $getSelection,
     $isElementNode,
     $isRangeSelection,
+    $isRootOrShadowRoot,
     ElementNode,
     LexicalEditor,
     LexicalNode,
@@ -25,11 +26,12 @@ import {
  * existing toggle's content all the way up to the toggle's own CollapsibleContainerNode, treating
  * the whole toggle as "the block" instead of the inner paragraph the user is actually acting on.
  */
-function resolveActionableBlock(startNode: LexicalNode): ElementNode | null {
+export function $resolveActionableBlock(startNode: LexicalNode): ElementNode | null {
+    if ($isRootOrShadowRoot(startNode)) return null;
     let current: LexicalNode = startNode;
     for (; ;) {
         const parent = current.getParent();
-        if (parent === null || $isCollapsibleContentNode(parent)) {
+        if (parent === null || $isRootOrShadowRoot(parent) || $isCollapsibleContentNode(parent)) {
             return $isElementNode(current) ? current : null;
         }
         current = parent;
@@ -49,7 +51,7 @@ function withTargetedSelection(editor: LexicalEditor, nodeKey: NodeKey, run: () 
     editor.update(() => {
         const node = $getNodeByKey(nodeKey);
         if (!node) return;
-        const target = resolveActionableBlock(node);
+        const target = $resolveActionableBlock(node);
         // A toggle's own container is never a valid "Turn into" target: $setBlocksType resolves
         // its block via Lexical's own block-matching, which (since the container disqualifies
         // itself via canBeEmpty() === false) lands on the inner title instead of the container,
@@ -91,9 +93,7 @@ export function applyColorToBlock(editor: LexicalEditor, nodeKey: NodeKey, style
  *  rather than $setBlocksType - dispatched right after the targeted selection is committed, so
  *  the list command's own internal update reads the correct (just-targeted) selection. */
 export function turnBlockIntoViaCommand(editor: LexicalEditor, nodeKey: NodeKey, command: any, payload: any): void {
-    const didTarget = withTargetedSelection(editor, nodeKey, () => { });
-    if (!didTarget) return;
-    editor.dispatchCommand(command, payload);
+    withTargetedSelection(editor, nodeKey, () => editor.dispatchCommand(command, payload));
 }
 
 /**
@@ -106,7 +106,7 @@ export function turnBlockIntoViaCommand(editor: LexicalEditor, nodeKey: NodeKey,
 export function $wrapBlockAsToggle(nodeKey: NodeKey): void {
     const node = $getNodeByKey(nodeKey);
     if (!node) return;
-    const target = resolveActionableBlock(node);
+    const target = $resolveActionableBlock(node);
     if (!target) return;
     // Already a toggle (e.g. reached directly via the block context menu's "Turn into:
     // Toggle" on an existing toggle) - wrapping it again would nest a bare <summary>/content

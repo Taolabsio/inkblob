@@ -40,13 +40,13 @@ help:
 # Build commands
 build:
 	@echo "$(BLUE)Building Move contracts...$(NC)"
-	sui move build --silence-warnings --skip-fetch-latest-git-deps
+	sui move build --silence-warnings
 	@echo "$(GREEN)Build completed successfully!$(NC)"
 
 # Test commands
 test:
 	@echo "$(BLUE)Running tests...$(NC)"
-	sui move test --silence-warnings --skip-fetch-latest-git-deps
+	sui move test --silence-warnings
 	@echo "$(GREEN)Tests completed!$(NC)"
 
 # Code quality and formatting
