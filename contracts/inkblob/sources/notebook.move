@@ -45,7 +45,7 @@ module inkblob::notebook {
     const E_WAL_TREASURY_NOT_FOUND: u64 = 23;   // WAL treasury not found
 
     // Concurrency control errors
-    const E_VERSION_MISMATCH: u64 = 24;  // expected_revision did not match the note's current updated_at (concurrent edit conflict)
+    const E_VERSION_MISMATCH: u64 = 24;  // expected_revision did not match the note's current revision (concurrent edit conflict)
 
     // Note nesting (page-in-page) errors
     const E_MAX_NOTE_DEPTH: u64 = 25;          // Note depth exceeds max nesting level
@@ -1569,7 +1569,7 @@ module inkblob::notebook {
             // Update existing note
             let note = table::borrow_mut(&mut notebook.notes, note_id);
             // Optimistic concurrency check: if the caller supplied an expected
-            // version, it must match the note's current updated_at or we abort.
+            // version, it must match the note's current revision or we abort.
             // A None expected_revision skips the check entirely (backward compatible).
             assert!(
                 option::is_none(&expected_revision) || *option::borrow(&expected_revision) == note.revision,
@@ -1590,7 +1590,9 @@ module inkblob::notebook {
                 note.rebate_claimed = false;
             };
         } else {
-            // Create new note
+            // Create new note. A write based on an expected revision always leaves the note at
+            // expected + 1, in this branch too: a client whose placeholder create never landed
+            // then stays in step with the chain instead of hitting a permanent version mismatch.
             let note = Note {
                 id: note_id,
                 blob_id,
@@ -1598,7 +1600,7 @@ module inkblob::notebook {
                 encrypted_title,
                 folder_id,
                 parent_note_id,
-                revision: 0,
+                revision: if (option::is_some(&expected_revision)) *option::borrow(&expected_revision) + 1 else 0,
                 created_at: now,
                 updated_at: now,
                 is_deleted: false,
@@ -1702,7 +1704,7 @@ module inkblob::notebook {
             // Update existing note
             let note = table::borrow_mut(&mut notebook.notes, note_id);
             // Optimistic concurrency check: if the caller supplied an expected
-            // version, it must match the note's current updated_at or we abort.
+            // version, it must match the note's current revision or we abort.
             // A None expected_revision skips the check entirely (backward compatible).
             assert!(
                 option::is_none(&expected_revision) || *option::borrow(&expected_revision) == note.revision,
@@ -1722,7 +1724,9 @@ module inkblob::notebook {
                 note.rebate_claimed = false;
             };
         } else {
-            // Create new note
+            // Create new note. A write based on an expected revision always leaves the note at
+            // expected + 1, in this branch too: a client whose placeholder create never landed
+            // then stays in step with the chain instead of hitting a permanent version mismatch.
             let note = Note {
                 id: note_id,
                 blob_id,
@@ -1730,7 +1734,7 @@ module inkblob::notebook {
                 encrypted_title,
                 folder_id,
                 parent_note_id,
-                revision: 0,
+                revision: if (option::is_some(&expected_revision)) *option::borrow(&expected_revision) + 1 else 0,
                 created_at: now,
                 updated_at: now,
                 is_deleted: false,

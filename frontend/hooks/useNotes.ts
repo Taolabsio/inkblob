@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { decryptText } from '../crypto/decryption';
 import { SuiService } from '../services/suiService';
 import { Note } from '../types';
+import { withPlaceholderContent } from '../utils/noteState';
 import { useActiveNotebook } from './useActiveNotebook';
 
 export function useNotes() {
@@ -71,7 +72,7 @@ export function useNotes() {
                             });
 
                             // Return note with default title instead of throwing error
-                            return {
+                            return withPlaceholderContent({
                                 id: noteId,
                                 title: '[No Title]',
                                 content: '', // Content is in Walrus, not here
@@ -84,13 +85,13 @@ export function useNotes() {
                                 parentNoteId,
                                 walPaid,
                                 rebateClaimed,
-                            } as Note;
+                            } as Note);
                         }
 
                         // Decrypt title - now we know title is a valid string
                         const title = await decryptText(rawNote.encrypted_title, encryptionKey);
 
-                        return {
+                        return withPlaceholderContent({
                             id: noteId,
                             title: title,
                             content: '', // Content is in Walrus, not here. We fetch on demand.
@@ -103,7 +104,7 @@ export function useNotes() {
                             parentNoteId,
                             walPaid,
                             rebateClaimed,
-                        } as Note;
+                        } as Note);
                     } catch (e) {
                         // Enhanced error handling for decryption failures
                         const titlePreview = rawNote.encrypted_title ?

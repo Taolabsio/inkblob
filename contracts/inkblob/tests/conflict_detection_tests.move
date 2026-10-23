@@ -193,6 +193,57 @@ module inkblob::conflict_detection_tests {
         test_scenario::end(scenario);
     }
 
+    /// The frontend records expected + 1 after every landed save. When the placeholder create
+    /// never landed, the first save takes the create branch, which must agree with that.
+    #[test]
+    public fun test_update_note_create_from_expected_revision_stays_in_step() {
+        let mut scenario = test_utils::create_scenario(test_utils::owner());
+        let (mut notebook, mut reserve) = test_utils::create_test_notebook_with_reserve(&mut scenario, b"CAS Create Revision Test");
+
+        // The placeholder create (no expected revision) still starts at 0.
+        let placeholder_id = create_test_note(&mut scenario, &mut notebook, &mut reserve);
+        assert!(notebook::note_revision(notebook::borrow_note(notebook::get_notebook_notes(&notebook), placeholder_id)) == 0, 0);
+
+        let ctx = test_scenario::ctx(&mut scenario);
+        let note_id = create_test_id_from_address(test_utils::owner(), ctx);
+        update_note(
+            &mut notebook,
+            &mut reserve,
+            note_id,
+            string::utf8(b"blob_id"),
+            string::utf8(b"blob_object_id"),
+            string::utf8(b"encrypted_title"),
+            option::none(),
+            option::none(),
+            option::some(0),
+            option::none(),
+            option::none(),
+            test_scenario::ctx(&mut scenario)
+        );
+        assert!(notebook::note_revision(notebook::borrow_note(notebook::get_notebook_notes(&notebook), note_id)) == 1, 1);
+
+        // The client's next save is based on revision 1 and must be accepted.
+        update_note(
+            &mut notebook,
+            &mut reserve,
+            note_id,
+            string::utf8(b"blob_id_v2"),
+            string::utf8(b"blob_object_id_v2"),
+            string::utf8(b"encrypted_title_v2"),
+            option::none(),
+            option::none(),
+            option::some(1),
+            option::none(),
+            option::none(),
+            test_scenario::ctx(&mut scenario)
+        );
+        assert!(notebook::note_revision(notebook::borrow_note(notebook::get_notebook_notes(&notebook), note_id)) == 2, 2);
+
+        test_scenario::return_shared(notebook);
+        test_scenario::return_shared(reserve);
+        test_scenario::end(scenario);
+    }
+
     // ========== update_note_with_session ==========
 
     /// Sets up a notebook plus a funded SessionCap held by the hot wallet device,
@@ -303,6 +354,55 @@ module inkblob::conflict_detection_tests {
             option::none(),
             test_scenario::ctx(&mut scenario)
         );
+
+        test_scenario::return_shared(notebook);
+        test_scenario::return_shared(reserve);
+        test_scenario::end(scenario);
+    }
+
+    #[test]
+    public fun test_update_note_with_session_create_from_expected_revision_stays_in_step() {
+        let mut scenario = test_utils::create_scenario(test_utils::owner());
+        let (mut notebook, mut reserve, hot_wallet) = create_test_notebook_with_session(&mut scenario);
+
+        test_utils::switch_to_user(&mut scenario, hot_wallet);
+        let session_cap = test_scenario::take_from_sender<SessionCap>(&scenario);
+        let ctx = test_scenario::ctx(&mut scenario);
+        let note_id = create_test_id_from_address(hot_wallet, ctx);
+
+        update_note_with_session(
+            &mut notebook,
+            &mut reserve,
+            session_cap,
+            note_id,
+            string::utf8(b"blob_id"),
+            string::utf8(b"blob_object_id"),
+            string::utf8(b"encrypted_title"),
+            option::none(),
+            option::none(),
+            option::some(0),
+            option::none(),
+            option::none(),
+            test_scenario::ctx(&mut scenario)
+        );
+        assert!(notebook::note_revision(notebook::borrow_note(notebook::get_notebook_notes(&notebook), note_id)) == 1, 0);
+
+        test_utils::switch_to_user(&mut scenario, test_utils::owner());
+        update_note(
+            &mut notebook,
+            &mut reserve,
+            note_id,
+            string::utf8(b"blob_id_v2"),
+            string::utf8(b"blob_object_id_v2"),
+            string::utf8(b"encrypted_title_v2"),
+            option::none(),
+            option::none(),
+            option::some(1),
+            option::none(),
+            option::none(),
+            test_scenario::ctx(&mut scenario)
+        );
+        assert!(notebook::note_revision(notebook::borrow_note(notebook::get_notebook_notes(&notebook), note_id)) == 2, 1);
 
         test_scenario::return_shared(notebook);
         test_scenario::return_shared(reserve);

@@ -1,32 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useActiveNotebook } from './useActiveNotebook';
-
-/**
- * Check if a blob ID is valid for fetching from Walrus
- * Filters out placeholder values and invalid formats
- */
-export function isValidBlobId(blobId: string | null | undefined): blobId is string {
-    // Check for null/undefined/empty
-    if (!blobId || blobId.trim() === '') {
-        return false;
-    }
-
-    // Check for known placeholder values used in SuiService
-    const placeholderValues = ['temp_blob_id', 'temp_blob_object_id'];
-    if (placeholderValues.includes(blobId)) {
-        console.debug(`[useNoteContent] Skipping placeholder blob ID: ${blobId}`);
-        return false;
-    }
-
-    // Basic format validation (blob IDs should be reasonably long strings)
-    // This is a simple check to avoid obviously invalid IDs
-    if (blobId.length < 10) {
-        console.debug(`[useNoteContent] Skipping blob ID that's too short: ${blobId}`);
-        return false;
-    }
-
-    return true;
-}
+import { isValidBlobId } from '../utils/noteState';
 
 /**
  * Hook to fetch and decrypt note content from Walrus

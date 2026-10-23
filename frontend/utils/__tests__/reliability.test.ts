@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { requireSuccessfulTransaction } from '../transactions';
-import { mergeRemoteNotes } from '../noteState';
+import { mergeRemoteNotes, withPlaceholderContent } from '../noteState';
 import type { Note } from '../../types';
 const note = (content: string, revision = '1'): Note => ({ id: 'a', title: 'A', content, blobId: 'blob', folderId: 'notes', updatedAt: new Date(0), revision, contentLoaded: true });
 describe('data integrity', () => {
@@ -16,6 +16,15 @@ describe('data integrity', () => {
     });
     it('restores a local encrypted draft over unhydrated metadata', () => {
         expect(mergeRemoteNotes([{ ...note(''), contentLoaded: false }], [{ ...note('recovered'), hasDraft: true }], new Set(['a']))[0].content).toBe('recovered');
+    });
+    it('keeps a freshly created note editable when its chain copy still references the placeholder blob', () => {
+        const local = { ...note('', '0'), blobId: '' };
+        const remote = withPlaceholderContent({ ...note('', '0'), blobId: 'temp_blob_id', contentLoaded: undefined });
+        expect(mergeRemoteNotes([local], [remote], new Set())[0]).toMatchObject({ blobId: 'temp_blob_id', content: '', contentLoaded: true });
+    });
+    it('ignores a refresh that started before the latest save landed', () => {
+        const saved = { ...note('saved', '2'), blobId: 'blob-v2' };
+        expect(mergeRemoteNotes([saved], [{ ...note('', '1'), contentLoaded: false }], new Set())[0]).toMatchObject({ blobId: 'blob-v2', content: 'saved', revision: '2' });
     });
     it('applies an empty remote list while preserving only unsaved local work', () => {
         expect(mergeRemoteNotes([note('')], [], new Set())).toEqual([]);

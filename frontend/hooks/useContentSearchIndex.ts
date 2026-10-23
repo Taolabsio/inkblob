@@ -3,7 +3,7 @@ import { useCallback, useRef, useState } from 'react';
 import { noteText } from '../utils/noteText';
 import { Note } from '../types';
 import { useActiveNotebook } from './useActiveNotebook';
-import { isValidBlobId } from './useNoteContent';
+import { isValidBlobId } from '../utils/noteState';
 
 // Body-content search requires decrypting each note's Walrus blob, a real network + crypto cost
 // per note - so this only indexes a bounded, recent slice on explicit search intent (search box
