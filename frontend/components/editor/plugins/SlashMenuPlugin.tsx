@@ -14,21 +14,33 @@ class SlashMenuOption extends MenuOption {
   refElement: HTMLElement | null = null;
   constructor(public title: string, public description: string, public keywords: string[], public icon: ReactNode, public onSelect: () => void) { super(title); }
 }
-function SlashMenuPopover({ anchor, children }: { anchor: MutableRefObject<HTMLElement | null>; children: ReactNode }) {
+export function SlashMenuPopover({ anchor, children }: { anchor: MutableRefObject<HTMLElement | null>; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ top: 0, left: 0 });
+  // Lexical attaches and positions its anchor in an effect that runs after this child's effects, so
+  // the first measurement is of a detached element at (0, 0). Stay hidden until the anchor is placed,
+  // and follow every later placement Lexical makes (typing, scrolling, flipping above the caret).
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   useEffect(() => {
+    const element = anchor.current;
+    if (!element) return;
     const update = () => {
-      const rect = anchor.current?.getBoundingClientRect();
-      if (rect) setPosition({ top: rect.bottom + 6, left: rect.left });
+      if (!element.isConnected) return;
+      const rect = element.getBoundingClientRect();
+      setPosition({ top: rect.bottom + 6, left: rect.left });
     };
     update();
+    const observer = new MutationObserver(update);
+    observer.observe(element, { attributes: true, attributeFilter: ['style'] });
     window.addEventListener('resize', update);
     window.addEventListener('scroll', update, true);
-    return () => { window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true); };
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
   }, [anchor]);
-  const clamped = usePopoverPosition(ref, position);
-  return createPortal(<div ref={ref} className="slash-menu" style={clamped}>{children}</div>, document.body);
+  const clamped = usePopoverPosition(ref, position ?? { top: 0, left: 0 });
+  return createPortal(<div ref={ref} className="slash-menu" style={position ? clamped : { ...clamped, visibility: 'hidden' }}>{children}</div>, document.body);
 }
 export default function SlashMenuPlugin() {
   const [editor] = useLexicalComposerContext();
