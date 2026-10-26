@@ -23,7 +23,7 @@ export function useAutosave({ noteId, content, title, onSave, onDirtyChange,
     const mounted = useRef(false);
     const dirty = useRef(false);
     const saving = useRef(false);
-    const initialized = useRef(false);
+    const seen = useRef<{ content: string; title: string } | null>(null);
     const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const retries = useRef(0);
     const runRef = useRef<(silent: boolean) => Promise<void>>(async () => {});
@@ -33,7 +33,9 @@ export function useAutosave({ noteId, content, title, onSave, onDirtyChange,
     };
     const markDirty = (value: boolean) => {
         dirty.current = value;
-        if (mounted.current) setIsDirty(value);
+        // An unmounted editor no longer speaks for its note; the app acknowledges its own saves.
+        if (!mounted.current) return;
+        setIsDirty(value);
         latest.current.onDirtyChange?.(latest.current.noteId, value);
     };
     const schedule = (delay: number) => {
@@ -69,16 +71,23 @@ export function useAutosave({ noteId, content, title, onSave, onDirtyChange,
         return () => {
             mounted.current = false;
             cancelTimer();
-            if (dirty.current && latest.current.enabled && latest.current.ready && !saving.current) {
-                void latest.current.onSave(latest.current.noteId, { silent: true }).catch(() => {});
-            }
+            // Flush as a tracked save: if React remounts this instance (StrictMode), the flush
+            // stays the one in-flight save and its result settles the dirty state.
+            if (dirty.current && latest.current.enabled) void runRef.current(true);
         };
     }, []);
     useEffect(() => {
-        if (!ready) { initialized.current = false; return; }
-        if (!initialized.current) {
-            initialized.current = true;
+        if (!ready) { seen.current = null; return; }
+        const previous = seen.current;
+        seen.current = { content, title };
+        if (!previous) {
             if (initiallyDirty) { markDirty(true); if (enabled) schedule(delayMs); }
+            return;
+        }
+        // Re-running without an edit (a StrictMode remount, a new delay) is not an edit; it only
+        // revives a pending save that the remount's cleanup cancelled.
+        if (previous.content === content && previous.title === title) {
+            if (dirty.current && enabled && !saving.current && !timer.current) schedule(delayMs);
             return;
         }
         retries.current = 0;

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useAutosave, type SaveResult } from '../useAutosave';
@@ -46,6 +47,26 @@ describe('autosave reliability', () => {
         await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
         expect(save).toHaveBeenCalledTimes(1);
         expect(result.current.isDirty).toBe(true);
+    });
+    it('does not treat a StrictMode remount as an edit', async () => {
+        const save = vi.fn<() => Promise<SaveResult>>().mockResolvedValue('saved');
+        const { result, rerender } = renderHook(({ content }) => useAutosave({ noteId: 'a', title: 'A', content, onSave: save }),
+            { initialProps: { content: 'saved text' }, wrapper: StrictMode });
+        await advance();
+        expect(save).not.toHaveBeenCalled();
+        expect(result.current.isDirty).toBe(false);
+        rerender({ content: 'edited text' });
+        await advance();
+        expect(save).toHaveBeenCalledTimes(1);
+    });
+    it('saves a recovered draft exactly once under StrictMode', async () => {
+        const save = vi.fn<() => Promise<SaveResult>>().mockResolvedValue('saved');
+        const { result } = renderHook(() => useAutosave({ noteId: 'a', title: 'A', content: 'draft', initiallyDirty: true, onSave: save }),
+            { wrapper: StrictMode });
+        await advance();
+        await advance();
+        expect(save).toHaveBeenCalledTimes(1);
+        expect(result.current.isDirty).toBe(false);
     });
     it('does not automatically open wallet dialogs when autosave is disabled', async () => {
         const save = vi.fn<() => Promise<SaveResult>>().mockResolvedValue('saved');
